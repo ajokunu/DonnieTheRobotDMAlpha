@@ -166,10 +166,10 @@ async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.2
             
             # OpenAI TTS payload optimized for speed
             payload = {
-                "model": "tts-1",  # Faster model instead of tts-1-hd
+                "model": "tts-1-hd",  # voice quality model
                 "input": clean_text,
                 "voice": voice,  # "fable" voice - expressive and dramatic for storytelling
-                "response_format": "mp3",
+                "response_format": "opus",
                 "speed": speed  # Adjustable speed for optimal gameplay
             }
             
@@ -261,7 +261,7 @@ async def speak_thinking_sound_directly(guild_id: int, text: str):
             return
         
         # Save to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
             temp_file.write(audio_data.getvalue())
             temp_filename = temp_file.name
         
@@ -340,7 +340,7 @@ async def speak_text_directly(guild_id: int, text: str):
         return
     
     # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
         temp_file.write(audio_data.getvalue())
         temp_filename = temp_file.name
     
