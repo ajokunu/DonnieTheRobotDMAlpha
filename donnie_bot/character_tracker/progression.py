@@ -4,7 +4,8 @@ from discord import app_commands
 from typing import Optional
 from datetime import datetime
 
-from ..database.operations import CharacterOperations, EpisodeOperations
+# Fixed imports - use absolute imports instead of relative
+from database.operations import CharacterOperations, EpisodeOperations
 
 class CharacterProgressionCommands:
     """Character progression and tracking commands"""

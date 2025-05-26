@@ -5,11 +5,11 @@ from typing import Optional
 import asyncio
 from datetime import datetime
 
-from ..database.operations import (
+# Fixed imports - use absolute imports instead of relative
+from database.operations import (
     CampaignOperations, EpisodeOperations, CharacterOperations, PlayerNoteOperations
 )
-from .recap_generator import RecapGenerator
-from .episode_logic import EpisodeLogic
+from episode_manager.recap_generator import RecapGenerator
 
 class EpisodeCommands:
     """Episode management commands for Donnie the DM bot"""
@@ -22,7 +22,6 @@ class EpisodeCommands:
         self.tts_enabled = tts_enabled
         self.add_to_voice_queue = add_to_voice_queue_func
         self.recap_generator = RecapGenerator()
-        self.episode_logic = EpisodeLogic()
         
         self._register_commands()
     

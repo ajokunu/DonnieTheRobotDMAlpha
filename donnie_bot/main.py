@@ -507,8 +507,8 @@ async def join_voice_channel(interaction: discord.Interaction):
         await interaction.response.send_message("❌ You need to be in a voice channel first!", ephemeral=True)
         return
     
-    if not campaign_context.get("session_started", False):
-        await interaction.response.send_message("❌ Start the campaign first with `/start`!", ephemeral=True)
+    if not campaign_context.get("session_started", False) and not campaign_context.get("episode_active", False):
+        await interaction.response.send_message("❌ Start the campaign first with `/start` or `/start_episode`!", ephemeral=True)
         return
     
     voice_channel = interaction.user.voice.channel
@@ -545,8 +545,8 @@ async def join_voice_channel(interaction: discord.Interaction):
         
         await interaction.response.send_message(embed=embed)
         
-        # Welcome message in voice
-        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating your Storm King's Thunder campaign with realistic responses - you'll hear me thinking, shuffling notes, and preparing dramatic responses just like a real DM!"
+        # Welcome message in voice (FIXED syntax error)
+        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign, you might be thinking, ah a fake robot I can def exploit this guy to cheat my way to the top of the party and eventually bust this campaign wide open, we'll see about that fiends!"
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
         
     except Exception as e:
