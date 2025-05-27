@@ -3,4 +3,4 @@ Speed up donnie response time and donnie speech speed.
 Figure out how to handle mulltiple people talking
 add guard rails for commands
 discuss how to integrate with combat. 
-Robot keeps using discord name rather than input character name 
+Robot keeps using discord name rather than input character name
