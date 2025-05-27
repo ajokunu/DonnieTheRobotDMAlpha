@@ -209,21 +209,21 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
     
     continuation_text = ""
     
-    # Check if we need to truncate for TTS speed
-    if len(tts_text) > 350:  # Slightly lower threshold for better responsiveness
+    # Check if we need to truncate for TTS speed - be more conservative
+    if len(tts_text) > 400:  # Raised threshold to avoid unnecessary splits
         sentences = tts_text.split('. ')
         
-        # Look for natural stopping points
+        # Look for STRONG natural stopping points only
         natural_break_index = None
         for i, sentence in enumerate(sentences):
+            # Only split at very clear breaks - questions or direct requests
             if any(indicator in sentence.lower() for indicator in [
-                'roll', 'make a', 'what do you', 'how do you', '?', 
-                'initiative', 'perception', 'investigation', 'tell me'
-            ]):
+                'what do you do?', 'roll a', 'make a', 'roll for', '?'
+            ]) and i > 0:  # Don't split at the very first sentence
                 natural_break_index = i + 1
                 break
         
-        # If we found a natural break and it's reasonable length
+        # If we found a STRONG natural break, use it
         if natural_break_index and natural_break_index < len(sentences):
             spoken_sentences = sentences[:natural_break_index]
             remaining_sentences = sentences[natural_break_index:]
@@ -232,10 +232,13 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
             if remaining_sentences:
                 continuation_text = '. '.join(remaining_sentences) + '.'
         
-        # If no natural break found, split at 2 sentences for TTS
-        elif len(sentences) > 2:
-            spoken_sentences = sentences[:2] 
-            remaining_sentences = sentences[2:]
+        # Only split at sentence boundaries if really long (500+ chars)
+        elif len(tts_text) > 500 and len(sentences) > 3:
+            # Take first half of sentences, but ensure we don't split mid-thought
+            split_point = min(len(sentences) // 2, 3)  # Max 3 sentences in first part
+            
+            spoken_sentences = sentences[:split_point] 
+            remaining_sentences = sentences[split_point:]
             
             tts_text = '. '.join(spoken_sentences) + '.'
             if remaining_sentences:
@@ -244,11 +247,46 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
     # Clean up continuation text
     if continuation_text:
         continuation_text = continuation_text.strip()
-        # Add connecting word if continuation doesn't start naturally
-        if continuation_text and not continuation_text[0].isupper() and not continuation_text.startswith(('And', 'But', 'However', 'Meanwhile')):
+        
+        # Make sure continuation starts properly
+        if continuation_text and not continuation_text[0].isupper():
             continuation_text = continuation_text[0].upper() + continuation_text[1:]
+        
+        # Remove any duplicate content between tts_text and continuation_text
+        continuation_text = remove_duplicate_content(tts_text, continuation_text)
     
     return tts_text, continuation_text
+
+def remove_duplicate_content(first_part: str, second_part: str) -> str:
+    """Remove duplicate sentences between first and second part"""
+    if not second_part:
+        return ""
+    
+    # Split both parts into sentences
+    first_sentences = [s.strip() for s in first_part.split('.') if s.strip()]
+    second_sentences = [s.strip() for s in second_part.split('.') if s.strip()]
+    
+    # Remove sentences from second part that appear in first part
+    unique_sentences = []
+    for sentence in second_sentences:
+        # Check if this sentence (or very similar) appears in first part
+        is_duplicate = False
+        for first_sentence in first_sentences:
+            # Check for exact match or high similarity
+            if (sentence.lower() in first_sentence.lower() or 
+                first_sentence.lower() in sentence.lower() or
+                sentence == first_sentence):
+                is_duplicate = True
+                break
+        
+        if not is_duplicate:
+            unique_sentences.append(sentence)
+    
+    # Rebuild continuation text
+    if unique_sentences:
+        return '. '.join(unique_sentences) + '.'
+    else:
+        return ""  # Return empty if all content was duplicate
 
 async def send_continuation_if_needed(message, full_dm_response: str, tts_text: str, 
                                     continuation_text: str, guild_id: int, character_name: str):
