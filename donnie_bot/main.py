@@ -38,12 +38,12 @@ voice_queue = {}  # Voice queue per guild to prevent overlapping
 # DM Thinking Sounds - ACTUAL sounds, not descriptions
 DM_THINKING_SOUNDS = [
     "...Hhhhhmm...",
-    "...Aaaheem",  # actual throat clearing sound
-    "...Uhhhh...",
+    "...Aaahhh okay let's try",  # actual throat clearing sound
+    "...Uhhhh...huh yes okay...",
     "...Let meeee see...",
     "...Mmm-hmm...",
-    "...Ah...",
-    "...Right...",
+    "...Ah, okay then...",
+    "...Right well okay...",
     "...Well...",
     "...Okay...",
     "...Hmm, hmm...",
@@ -148,7 +148,7 @@ PLAYER ACTION: {player_input}
 
 Respond as Donnie, the Storm King's Thunder DM, following ALL D&D 5e 2024 rules strictly:"""
 
-async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.25) -> io.BytesIO:
+async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20) -> Optional[io.BytesIO]:
     """Generate TTS audio using OpenAI's Fable voice - optimized for speed"""
     try:
         # Clean text for TTS (remove excessive formatting)
@@ -190,34 +190,98 @@ async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.2
         print(f"TTS generation error: {e}")
         return None
 
-def create_tts_version(full_text: str) -> str:
-    """Create shorter, optimized version for faster TTS while keeping essential drama"""
-    # Remove excessive descriptive phrases but keep action and drama
+def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
+    """
+    Create TTS version and return both the spoken version and any continuation needed
+    Returns: (tts_text, continuation_text)
+    """
     import re
     
-    # Keep the text but make it more concise for faster speech
+    original_text = full_text
     tts_text = full_text
     
-    # Remove excessive adjectives and redundant phrases
+    # Light cleanup - preserve the core message
     tts_text = re.sub(r'\b(very|quite|rather|extremely|incredibly|tremendously)\s+', '', tts_text)
     tts_text = re.sub(r'\b(suddenly|immediately|quickly|slowly)\s+', '', tts_text)
-    
-    # Simplify complex sentence structures
     tts_text = re.sub(r',\s+and\s+', ' and ', tts_text)
-    tts_text = re.sub(r'\s+as\s+[^.!?]*?\.', '.', tts_text)
-    
-    # Remove parenthetical information
     tts_text = re.sub(r'\([^)]*\)', '', tts_text)
-    
-    # Clean up extra spaces
     tts_text = re.sub(r'\s+', ' ', tts_text).strip()
     
-    # If still too long, take first 2 sentences for TTS
-    sentences = tts_text.split('. ')
-    if len(tts_text) > 200 and len(sentences) > 2:
-        tts_text = '. '.join(sentences[:2]) + '.'
+    continuation_text = ""
     
-    return tts_text
+    # Check if we need to truncate for TTS speed
+    if len(tts_text) > 350:  # Slightly lower threshold for better responsiveness
+        sentences = tts_text.split('. ')
+        
+        # Look for natural stopping points
+        natural_break_index = None
+        for i, sentence in enumerate(sentences):
+            if any(indicator in sentence.lower() for indicator in [
+                'roll', 'make a', 'what do you', 'how do you', '?', 
+                'initiative', 'perception', 'investigation', 'tell me'
+            ]):
+                natural_break_index = i + 1
+                break
+        
+        # If we found a natural break and it's reasonable length
+        if natural_break_index and natural_break_index < len(sentences):
+            spoken_sentences = sentences[:natural_break_index]
+            remaining_sentences = sentences[natural_break_index:]
+            
+            tts_text = '. '.join(spoken_sentences) + '.'
+            if remaining_sentences:
+                continuation_text = '. '.join(remaining_sentences) + '.'
+        
+        # If no natural break found, split at 2 sentences for TTS
+        elif len(sentences) > 2:
+            spoken_sentences = sentences[:2] 
+            remaining_sentences = sentences[2:]
+            
+            tts_text = '. '.join(spoken_sentences) + '.'
+            if remaining_sentences:
+                continuation_text = '. '.join(remaining_sentences) + '.'
+    
+    # Clean up continuation text
+    if continuation_text:
+        continuation_text = continuation_text.strip()
+        # Add connecting word if continuation doesn't start naturally
+        if continuation_text and not continuation_text[0].isupper() and not continuation_text.startswith(('And', 'But', 'However', 'Meanwhile')):
+            continuation_text = continuation_text[0].upper() + continuation_text[1:]
+    
+    return tts_text, continuation_text
+
+async def send_continuation_if_needed(message, full_dm_response: str, tts_text: str, 
+                                    continuation_text: str, guild_id: int, character_name: str):
+    """Send continuation message if the response was truncated"""
+    if not continuation_text or len(continuation_text.strip()) < 10:
+        return
+    
+    # Wait a moment for the TTS to finish or get close to finishing
+    await asyncio.sleep(3)
+    
+    # Create continuation embed
+    embed = discord.Embed(color=0x2E8B57)
+    embed.add_field(
+        name="🐉 Donnie continues...",
+        value=continuation_text,
+        inline=False
+    )
+    embed.set_footer(text="💬 Response continuation")
+    
+    # Send as follow-up
+    try:
+        await message.channel.send(embed=embed)
+        
+        # Add continuation to voice queue if voice is active
+        voice_will_speak = (guild_id in voice_clients and 
+                           voice_clients[guild_id].is_connected() and 
+                           tts_enabled.get(guild_id, False))
+        
+        if voice_will_speak:
+            await add_to_voice_queue(guild_id, continuation_text, f"{character_name} (continued)")
+            
+    except Exception as e:
+        print(f"Error sending continuation: {e}")
 
 async def play_thinking_sound(guild_id: int, character_name: str):
     """Play a random DM thinking sound immediately to fill waiting time"""
@@ -332,7 +396,7 @@ async def speak_text_directly(guild_id: int, text: str):
     speed = voice_speed.get(guild_id, 1.25)
     
     # Create optimized version for TTS (shorter = faster)
-    tts_text = create_tts_version(text)
+    tts_text, _ = create_tts_version_with_continuation(text)  # We only want the first part for voice
     
     # Generate TTS audio with optimized text
     audio_data = await generate_tts_audio(tts_text, voice="fable", speed=speed)
@@ -436,7 +500,12 @@ async def get_claude_dm_response(user_id: str, player_input: str):
             )
         )
         
-        dm_response = response.content[0].text.strip()
+        # Handle the response content properly
+        if hasattr(response.content[0], 'text'):
+            dm_response = response.content[0].text.strip()
+        else:
+            # Fallback for different response types
+            dm_response = str(response.content[0]).strip()
         
         # Update session history
         campaign_context["session_history"].append({
@@ -545,8 +614,8 @@ async def join_voice_channel(interaction: discord.Interaction):
         
         await interaction.response.send_message(embed=embed)
         
-        # Welcome message in voice (FIXED syntax error)
-        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign, you might be thinking, ah a fake robot I can def exploit this guy to cheat my way to the top of the party and eventually bust this campaign wide open, we'll see about that fiends!"
+        # Welcome message in voice
+        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign, you might be thinking, ah a fake robot I can def exploit this guy to cheat my way to the top of the party and eventually bust this campaign wide open, we'll see about that fiends, but anyway yeah just type in forward slash action and tell me what you want to try and do and lets tell this story together shall we!"
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
         
     except Exception as e:
@@ -1155,15 +1224,18 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
 async def process_dm_response_background(user_id: str, player_input: str, message, 
                                        character_name: str, char_data: dict, 
                                        player_name: str, guild_id: int, voice_will_speak: bool):
-    """Process DM response in background and update message"""
+    """Process DM response with automatic continuation support"""
     try:
         # Get Claude DM response
         dm_response = await get_claude_dm_response(user_id, player_input)
         
-        # Update the message with the actual response
+        # Get TTS version and continuation
+        tts_text, continuation_text = create_tts_version_with_continuation(dm_response)
+        
+        # Update the message with the actual response (show full response in text)
         embed = message.embeds[0]
         
-        # Update DM response field
+        # Update DM response field with FULL response
         for i, field in enumerate(embed.fields):
             if field.name == "🐉 Donnie the DM":
                 embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
@@ -1171,9 +1243,15 @@ async def process_dm_response_background(user_id: str, player_input: str, messag
         
         await message.edit(embed=embed)
         
-        # Add to voice queue if voice is enabled
+        # Add to voice queue if voice is enabled (use TTS-optimized version for speed)
         if voice_will_speak:
-            await add_to_voice_queue(guild_id, dm_response, character_name, message)
+            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+        
+        # Send continuation if needed
+        if continuation_text:
+            await send_continuation_if_needed(
+                message, dm_response, tts_text, continuation_text, guild_id, character_name
+            )
             
     except Exception as e:
         print(f"Background processing error: {e}")
@@ -1448,7 +1526,7 @@ async def show_campaign_info(interaction: discord.Interaction):
 @app_commands.describe(scene_description="The new scene description")
 async def set_scene(interaction: discord.Interaction, scene_description: str):
     """Update current scene (Admin only)"""
-    if interaction.user.guild_permissions.administrator:
+    if hasattr(interaction.user, 'guild_permissions') and interaction.user.guild_permissions.administrator:
         campaign_context["current_scene"] = scene_description
         embed = discord.Embed(
             title="🏛️ Scene Updated",
@@ -1556,8 +1634,14 @@ if __name__ == "__main__":
         print("⚠️  FFmpeg not found - required for voice features")
         print("Install FFmpeg: https://ffmpeg.org/download.html")
     
+    # Get bot token with proper error handling
+    bot_token = os.getenv('DISCORD_BOT_TOKEN')
+    if not bot_token:
+        print("❌ DISCORD_BOT_TOKEN environment variable not set!")
+        exit(1)
+    
     try:
-        bot.run(os.getenv('DISCORD_BOT_TOKEN'))
+        bot.run(bot_token)
     except KeyboardInterrupt:
         print("🛑 Bot shutdown requested")
     finally:
