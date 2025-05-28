@@ -18,6 +18,7 @@ load_dotenv()
 from database.database import init_database, close_database
 from episode_manager.episode_commands import EpisodeCommands  
 from character_tracker.progression import CharacterProgressionCommands
+from character_system import DnD5e2024CharacterSystem
 
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
@@ -789,314 +790,7 @@ async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
     
     await interaction.response.send_message(embed=embed)
 
-# ====== CHARACTER MANAGEMENT COMMANDS ======
 
-@bot.tree.command(name="character", description="Register your character for the Storm King's Thunder campaign")
-@app_commands.describe(
-    name="Your character's name",
-    race="Character race (Human, Elf, Dwarf, etc.)",
-    character_class="Character class (Fighter, Wizard, Rogue, etc.)",
-    level="Character level (1-20)",
-    background="Character background (Folk Hero, Acolyte, etc.)",
-    stats="Key ability scores (STR 16, DEX 14, CON 15, etc.)",
-    equipment="Important weapons, armor, and magical items",
-    spells="Known spells (if applicable)",
-    affiliations="Factions, organizations, or important relationships",
-    personality="Key personality traits, ideals, bonds, and flaws"
-)
-async def register_character(interaction: discord.Interaction, 
-                           name: str,
-                           race: str, 
-                           character_class: str,
-                           level: int,
-                           background: Optional[str] = None,
-                           stats: Optional[str] = None,
-                           equipment: Optional[str] = None,
-                           spells: Optional[str] = None,
-                           affiliations: Optional[str] = None,
-                           personality: Optional[str] = None):
-    """Register a detailed character for the campaign"""
-    user_id = str(interaction.user.id)
-    player_name = interaction.user.display_name
-    
-    # Set guild_id in campaign context if not set
-    if campaign_context["guild_id"] is None:
-        campaign_context["guild_id"] = str(interaction.guild.id)
-    
-    # Validate level
-    if level < 1 or level > 20:
-        await interaction.response.send_message("❌ Character level must be between 1 and 20!", ephemeral=True)
-        return
-    
-    # Safely handle optional parameters
-    safe_background = background if background is not None else "Unknown"
-    safe_stats = stats if stats is not None else "Standard array"
-    safe_equipment = equipment if equipment is not None else "Basic adventuring gear"
-    safe_affiliations = affiliations if affiliations is not None else "None"
-    safe_personality = personality if personality is not None else "To be determined in play"
-    
-    # Handle spells with class detection
-    if spells is not None:
-        safe_spells = spells
-    else:
-        spellcaster_classes = ["wizard", "cleric", "sorcerer", "warlock", "bard", "druid", "paladin", "ranger"]
-        if any(cls in character_class.lower() for cls in spellcaster_classes):
-            safe_spells = "Basic spells for class"
-        else:
-            safe_spells = "None"
-    
-    # Build comprehensive character profile
-    character_profile = {
-        "name": name,
-        "race": race,
-        "class": character_class,
-        "level": level,
-        "background": safe_background,
-        "stats": safe_stats,
-        "equipment": safe_equipment,
-        "spells": safe_spells,
-        "affiliations": safe_affiliations,
-        "personality": safe_personality,
-        "player_name": player_name,
-        "discord_user_id": user_id
-    }
-    
-    # Create formatted character description for Claude
-    character_description = f"""
-NAME: {character_profile['name']}
-PLAYER: {player_name} (Discord ID: {user_id})
-RACE & CLASS: {character_profile['race']} {character_profile['class']} (Level {character_profile['level']})
-BACKGROUND: {character_profile['background']}
-ABILITY SCORES: {character_profile['stats']}
-EQUIPMENT: {character_profile['equipment']}
-SPELLS: {character_profile['spells']}
-AFFILIATIONS: {character_profile['affiliations']}
-PERSONALITY: {character_profile['personality']}
-"""
-    
-    # Store using Discord User ID as primary key
-    campaign_context["characters"][user_id] = character_description
-    campaign_context["players"][user_id] = {
-        "user_id": user_id,
-        "player_name": player_name,
-        "character_data": character_profile,
-        "character_description": character_description
-    }
-    
-    # Create response embed
-    embed = discord.Embed(
-        title="🎭 Character Registered Successfully!",
-        color=0x32CD32
-    )
-    
-    embed.add_field(
-        name=f"⚔️ {character_profile['name']}",
-        value=f"**{character_profile['race']} {character_profile['class']}** (Level {character_profile['level']})\n*{character_profile['background']}*\n👤 Player: {player_name}",
-        inline=False
-    )
-    
-    if character_profile['stats'] != "Standard array":
-        embed.add_field(name="📊 Ability Scores", value=character_profile['stats'], inline=True)
-    
-    if character_profile['equipment'] != "Basic adventuring gear":
-        embed.add_field(name="⚔️ Equipment", value=character_profile['equipment'][:100] + ("..." if len(character_profile['equipment']) > 100 else ""), inline=True)
-    
-    if character_profile['spells'] not in ["None", "Basic spells for class"]:
-        embed.add_field(name="✨ Spells", value=character_profile['spells'][:100] + ("..." if len(character_profile['spells']) > 100 else ""), inline=True)
-    
-    if character_profile['affiliations'] != "None":
-        embed.add_field(name="🏛️ Affiliations", value=character_profile['affiliations'], inline=False)
-    
-    if character_profile['personality'] != "To be determined in play":
-        embed.add_field(name="🎭 Personality", value=character_profile['personality'][:200] + ("..." if len(character_profile['personality']) > 200 else ""), inline=False)
-    
-    embed.add_field(
-        name="⚡ Next Steps",
-        value="Start an episode with `/start_episode`, or use `/upload_character_sheet` to import a PDF character sheet, then use `/join_voice` to have Donnie narrate your adventure!",
-        inline=False
-    )
-    
-    embed.set_footer(text="Character bound to your Discord account and will be saved to episode history!")
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="party", description="View all registered characters in your party")
-async def view_party(interaction: discord.Interaction):
-    """Show all registered characters"""
-    if not campaign_context["characters"]:
-        embed = discord.Embed(
-            title="🎭 No Characters Registered",
-            description="No one has registered their character yet! Use `/character` to introduce yourself.",
-            color=0xFF6B6B
-        )
-        await interaction.response.send_message(embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🗡️ Your Adventuring Party",
-        description="Heroes ready to face the giant threat:",
-        color=0x4B0082
-    )
-    
-    for user_id, character_desc in campaign_context["characters"].items():
-        if user_id in campaign_context["players"]:
-            player_data = campaign_context["players"][user_id]
-            char_data = player_data["character_data"]
-            current_player_name = player_data["player_name"]
-            
-            # Create character summary
-            char_summary = f"**{char_data['race']} {char_data['class']}** (Level {char_data['level']})"
-            if char_data['background'] != "Unknown":
-                char_summary += f"\n*{char_data['background']}*"
-            
-            # Add key equipment if specified
-            if char_data['equipment'] != "Basic adventuring gear":
-                equipment_brief = char_data['equipment'][:60] + ("..." if len(char_data['equipment']) > 60 else "")
-                char_summary += f"\n🎒 {equipment_brief}"
-            
-            # Add affiliations if any
-            if char_data['affiliations'] != "None":
-                affiliations_brief = char_data['affiliations'][:50] + ("..." if len(char_data['affiliations']) > 50 else "")
-                char_summary += f"\n🏛️ {affiliations_brief}"
-            
-            embed.add_field(
-                name=f"⚔️ {char_data['name']} ({current_player_name})",
-                value=char_summary,
-                inline=False
-            )
-    
-    embed.set_footer(text=f"Party size: {len(campaign_context['characters'])} heroes ready for adventure!")
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="character_sheet", description="View detailed character information")
-@app_commands.describe(player="View another player's character (optional)")
-async def view_character_sheet(interaction: discord.Interaction, player: Optional[discord.Member] = None):
-    """Show detailed character sheet"""
-    target_user = player or interaction.user
-    user_id = str(target_user.id)
-    
-    if user_id not in campaign_context["characters"]:
-        embed = discord.Embed(
-            title="❌ Character Not Found",
-            description=f"No character registered for {target_user.display_name}. Use `/character` to register!",
-            color=0xFF6B6B
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Get character data
-    char_data = campaign_context["players"][user_id]["character_data"]
-    
-    embed = discord.Embed(
-        title=f"📜 Character Sheet: {char_data['name']}",
-        description=f"**{char_data['race']} {char_data['class']}** (Level {char_data['level']})",
-        color=0x4169E1
-    )
-
-    embed.add_field(name="📚 Background", value=char_data['background'], inline=True)
-    embed.add_field(name="📊 Ability Scores", value=char_data['stats'], inline=True)
-    embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
-    embed.add_field(name="⚔️ Equipment & Items", value=char_data['equipment'], inline=False)
-    
-    if char_data['spells'] not in ["None", "Basic spells for class"]:
-        embed.add_field(name="✨ Spells & Abilities", value=char_data['spells'], inline=False)
-    
-    if char_data['affiliations'] != "None":
-        embed.add_field(name="🏛️ Affiliations & Connections", value=char_data['affiliations'], inline=False)
-    
-    if char_data['personality'] != "To be determined in play":
-        embed.add_field(name="🎭 Personality & Roleplay", value=char_data['personality'], inline=False)
-    
-    embed.set_footer(text="Use /update_character to modify details • /character_progression to view progression")
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="update_character", description="Update specific aspects of your character")
-@app_commands.describe(
-    aspect="What to update",
-    new_value="The new value"
-)
-@app_commands.choices(aspect=[
-    app_commands.Choice(name="Level", value="level"),
-    app_commands.Choice(name="Stats/Ability Scores", value="stats"),
-    app_commands.Choice(name="Equipment/Items", value="equipment"), 
-    app_commands.Choice(name="Spells/Abilities", value="spells"),
-    app_commands.Choice(name="Affiliations/Connections", value="affiliations"),
-    app_commands.Choice(name="Personality/Roleplay", value="personality")
-])
-async def update_character(interaction: discord.Interaction, aspect: str, new_value: str):
-    """Update specific character aspects"""
-    user_id = str(interaction.user.id)
-    player_name = interaction.user.display_name
-    
-    if user_id not in campaign_context["characters"]:
-        embed = discord.Embed(
-            title="❌ No Character Found",
-            description="Please register a character first using `/character`!",
-            color=0xFF6B6B
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Get current character data
-    char_data = campaign_context["players"][user_id]["character_data"]
-    
-    # Update the specified aspect
-    if aspect == "level":
-        try:
-            level = int(new_value)
-            if level < 1 or level > 20:
-                await interaction.response.send_message("❌ Level must be between 1 and 20! Use `/level_up` to properly track progression.", ephemeral=True)
-                return
-            char_data["level"] = level
-        except ValueError:
-            await interaction.response.send_message("❌ Level must be a number!", ephemeral=True)
-            return
-    else:
-        char_data[aspect] = new_value
-    
-    # Update player name in case it changed
-    char_data["player_name"] = player_name
-    
-    # Rebuild character description for Claude
-    character_description = f"""
-NAME: {char_data['name']}
-PLAYER: {player_name} (Discord ID: {user_id})
-RACE & CLASS: {char_data['race']} {char_data['class']} (Level {char_data['level']})
-BACKGROUND: {char_data['background']}
-ABILITY SCORES: {char_data['stats']}
-EQUIPMENT: {char_data['equipment']}
-SPELLS: {char_data['spells']}
-AFFILIATIONS: {char_data['affiliations']}
-PERSONALITY: {char_data['personality']}
-"""
-    
-    # Update stored data
-    campaign_context["characters"][user_id] = character_description
-    campaign_context["players"][user_id]["character_description"] = character_description
-    campaign_context["players"][user_id]["player_name"] = player_name
-    
-    # Create confirmation embed  
-    aspect_names = {
-        "level": "⭐ Level",
-        "stats": "📊 Ability Scores",
-        "equipment": "⚔️ Equipment", 
-        "spells": "✨ Spells",
-        "affiliations": "🏛️ Affiliations",
-        "personality": "🎭 Personality"
-    }
-    
-    embed = discord.Embed(
-        title=f"✅ {char_data['name']} Updated!",
-        color=0x32CD32
-    )
-    
-    embed.add_field(
-        name=f"{aspect_names[aspect]} Updated",
-        value=new_value,
-        inline=False
-    )
-    
-    embed.set_footer(text="Character changes will be saved to the next episode snapshot")
-    await interaction.response.send_message(embed=embed)
 
 # ====== CORE GAMEPLAY COMMANDS ======
 
@@ -1609,11 +1303,17 @@ async def cleanup_confirmations(interaction: discord.Interaction):
 
 @bot.tree.command(name="help", description="Show comprehensive guide for the Storm King's Thunder TTS bot")
 async def show_help(interaction: discord.Interaction):
-    """Show comprehensive bot guide including TTS features, episode management, and PDF uploads"""
+    """Show comprehensive bot guide including TTS features, episode management, and 2024 character system"""
     embed = discord.Embed(
         title="⚡ Storm King's Thunder TTS Bot - Complete Guide",
-        description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice and episode management!",
+        description="Your AI-powered D&D 5e 2024 adventure with Donnie the DM's optimized voice and episode management!",
         color=0x4169E1
+    )
+    
+    embed.add_field(
+        name="🆕 D&D 5e 2024 Character System",
+        value="`/character` - Register character with 2024 rules (species, not race)\n`/character_details` - Set personality & appearance\n`/character_sheet_2024` - View complete 2024 character sheet\n`/manage_hp` - Health management with 2024 mechanics\n`/manage_spell_slots` - 2024 spellcasting system\n`/ability_check` - Skills & abilities with 2024 rules\n`/saving_throw` - Saving throws with 2024 mechanics",
+        inline=False
     )
     
     embed.add_field(
@@ -1623,26 +1323,20 @@ async def show_help(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="📄 Character Upload (NEW!)",
-        value="`/upload_character_sheet` - Upload PDF character sheet for auto-parsing\n`/character_sheet_help` - Get help with character sheet uploads\n`/character` - Manual character registration (alternative)",
+        name="📄 Character Upload (PDF Support)",
+        value="`/upload_character_sheet` - Upload PDF character sheet for auto-parsing\n`/character_sheet_help` - Get help with character sheet uploads",
         inline=False
     )
     
     embed.add_field(
-        name="📺 Episode Management (NEW!)",
+        name="📺 Episode Management",
         value="`/start_episode [name]` - Begin new episode with recap\n`/end_episode [summary]` - End current episode\n`/episode_recap [#] [style]` - Get AI dramatic recaps\n`/episode_history` - View past episodes\n`/add_story_note` - Add player notes (non-canonical)",
         inline=False
     )
     
     embed.add_field(
-        name="📈 Character Progression (NEW!)",
-        value="`/level_up <level> [reason]` - Level up with tracking\n`/character_progression [player]` - View progression history\n`/character_snapshot [notes]` - Manual character snapshot\n`/party_progression` - View entire party progression",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🎭 Character Management",
-        value="`/character` - Register detailed character\n`/party` - View all party members\n`/character_sheet` - View character details\n`/update_character` - Modify character aspects",
+        name="📈 Character Progression (2024)",
+        value="`/level_up <level> [reason]` - Level up with 2024 progression\n`/character_progression [player]` - View progression history\n`/character_snapshot [notes]` - Manual character snapshot\n`/party_progression` - View entire party progression",
         inline=False
     )
     
@@ -1665,13 +1359,13 @@ async def show_help(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="🌟 New Features Highlights",
-        value="• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Smart AI Parsing**: Claude reads every detail from your character sheet\n• **Episode System**: Persistent memory with dramatic recaps\n• **Character Progression**: Level tracking across episodes\n• **Voice Integration**: All features work with Donnie's voice narration\n• **Confirmation System**: Always verify parsed data before saving",
+        name="🌟 2024 D&D Features Highlights",
+        value="• **Species instead of Race**: Updated 2024 terminology\n• **Individual Ability Scores**: Proper validation and modifiers\n• **2024 Class Features**: Updated Player's Handbook features\n• **Modern Spellcasting**: 2024 spell slot progression\n• **Complete Skill System**: All 18 skills with proficiency tracking\n• **Combat Mechanics**: AC, HP, speed, hit dice tracking\n• **Voice Integration**: All 2024 features work with Donnie's voice",
         inline=False
     )
     
-    embed.set_footer(text="Donnie the DM awaits to guide your persistent, voice-enabled campaign adventure!")
-    await interaction.response.send_message(embed=embed)
+    embed.set_footer(text="Donnie the DM awaits to guide your D&D 5e 2024 adventure!")
+    await interaction.response.send_message(embed=embed) 
 
 # Initialize Episode Management and Character Progression
 episode_commands = EpisodeCommands(
@@ -1689,6 +1383,16 @@ character_progression = CharacterProgressionCommands(
     tts_enabled=tts_enabled,
     add_to_voice_queue_func=add_to_voice_queue
 )
+
+try:
+    character_system_2024 = DnD5e2024CharacterSystem(
+        bot=bot,
+        campaign_context=campaign_context,
+        claude_client=claude_client
+    )
+    print("✅ D&D 5e 2024 Character System initialized")
+except Exception as e:
+    print(f"❌ Error initializing D&D 5e 2024 Character System: {e}")
 
 # Initialize PDF Character Sheet Commands
 try:
