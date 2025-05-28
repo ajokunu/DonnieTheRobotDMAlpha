@@ -912,7 +912,7 @@ PERSONALITY: {character_profile['personality']}
     
     embed.add_field(
         name="⚡ Next Steps",
-        value="Start an episode with `/start_episode`, then use `/join_voice` to have Donnie narrate your adventure with dramatic voice and episode recaps!",
+        value="Start an episode with `/start_episode`, or use `/upload_character_sheet` to import a PDF character sheet, then use `/join_voice` to have Donnie narrate your adventure!",
         inline=False
     )
     
@@ -991,7 +991,7 @@ async def view_character_sheet(interaction: discord.Interaction, player: Optiona
         description=f"**{char_data['race']} {char_data['class']}** (Level {char_data['level']})",
         color=0x4169E1
     )
-    
+
     embed.add_field(name="📚 Background", value=char_data['background'], inline=True)
     embed.add_field(name="📊 Ability Scores", value=char_data['stats'], inline=True)
     embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
@@ -1564,7 +1564,7 @@ async def show_campaign_info(interaction: discord.Interaction):
 @app_commands.describe(scene_description="The new scene description")
 async def set_scene(interaction: discord.Interaction, scene_description: str):
     """Update current scene (Admin only)"""
-    if hasattr(interaction.user, 'guild_permissions') and interaction.user.guild_permissions.administrator:
+    if interaction.user.guild_permissions.administrator:
         campaign_context["current_scene"] = scene_description
         embed = discord.Embed(
             title="🏛️ Scene Updated",
@@ -1575,11 +1575,41 @@ async def set_scene(interaction: discord.Interaction, scene_description: str):
     else:
         await interaction.response.send_message("❌ Only server administrators can update scenes!", ephemeral=True)
 
+@bot.tree.command(name="cleanup_confirmations", description="Clean up expired character sheet confirmations (Admin only)")
+async def cleanup_confirmations(interaction: discord.Interaction):
+    """Clean up expired confirmations (Admin only)"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Only server administrators can use this command!", ephemeral=True)
+        return
+    
+    try:
+        # Import the PDF character parser
+        from pdf_character_parser import PDFCharacterCommands
+        
+        if hasattr(bot, 'pdf_character_commands'):
+            expired_count = bot.pdf_character_commands.cleanup_expired_confirmations()
+            embed = discord.Embed(
+                title="🧹 Cleanup Complete",
+                description=f"Removed {expired_count} expired character sheet confirmations",
+                color=0x32CD32
+            )
+        else:
+            embed = discord.Embed(
+                title="⚠️ PDF System Not Available",
+                description="The PDF character system is not currently loaded",
+                color=0xFFD700
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error during cleanup: {str(e)}", ephemeral=True)
+
 # ====== HELP COMMAND ======
 
 @bot.tree.command(name="help", description="Show comprehensive guide for the Storm King's Thunder TTS bot")
 async def show_help(interaction: discord.Interaction):
-    """Show comprehensive bot guide including TTS features and episode management"""
+    """Show comprehensive bot guide including TTS features, episode management, and PDF uploads"""
     embed = discord.Embed(
         title="⚡ Storm King's Thunder TTS Bot - Complete Guide",
         description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice and episode management!",
@@ -1589,6 +1619,12 @@ async def show_help(interaction: discord.Interaction):
     embed.add_field(
         name="🎤 Voice Features (OPTIMIZED!)",
         value="`/join_voice` - Donnie joins voice with fast, optimized narration\n`/leave_voice` - Donnie leaves voice channel\n`/mute_donnie` - Disable TTS narration\n`/unmute_donnie` - Enable TTS narration\n`/donnie_speed <1.0-2.0>` - Adjust speaking speed",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📄 Character Upload (NEW!)",
+        value="`/upload_character_sheet` - Upload PDF character sheet for auto-parsing\n`/character_sheet_help` - Get help with character sheet uploads\n`/character` - Manual character registration (alternative)",
         inline=False
     )
     
@@ -1624,13 +1660,13 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="⚙️ Admin Commands",
-        value="`/set_scene` - Update current scene",
+        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations",
         inline=False
     )
     
     embed.add_field(
-        name="🌟 New Episode System Features",
-        value="• **Persistent Memory**: Episodes saved with character snapshots\n• **AI Dramatic Recaps**: \"Previously on Storm King's Thunder...\"\n• **Character Progression**: Level tracking across episodes\n• **Player Story Notes**: Add notes (marked non-canonical)\n• **Voice Integration**: Episode recaps spoken by Donnie\n• **Auto-Save**: Characters and progress automatically saved",
+        name="🌟 New Features Highlights",
+        value="• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Smart AI Parsing**: Claude reads every detail from your character sheet\n• **Episode System**: Persistent memory with dramatic recaps\n• **Character Progression**: Level tracking across episodes\n• **Voice Integration**: All features work with Donnie's voice narration\n• **Confirmation System**: Always verify parsed data before saving",
         inline=False
     )
     
@@ -1654,6 +1690,27 @@ character_progression = CharacterProgressionCommands(
     add_to_voice_queue_func=add_to_voice_queue
 )
 
+# Initialize PDF Character Sheet Commands
+try:
+    from pdf_character_parser import PDFCharacterCommands
+    
+    pdf_character_commands = PDFCharacterCommands(
+        bot=bot,
+        campaign_context=campaign_context,
+        claude_client=claude_client
+    )
+    
+    # Store reference for cleanup command
+    bot.pdf_character_commands = pdf_character_commands
+    
+    print("✅ PDF Character Sheet system initialized")
+    
+except ImportError as e:
+    print(f"⚠️  PDF Character Sheet system not available: {e}")
+    print("Install required packages: pip install PyPDF2 pymupdf pillow")
+except Exception as e:
+    print(f"❌ Error initializing PDF system: {e}")
+
 if __name__ == "__main__":
     # Check for required dependencies
     try:
@@ -1672,14 +1729,17 @@ if __name__ == "__main__":
         print("⚠️  FFmpeg not found - required for voice features")
         print("Install FFmpeg: https://ffmpeg.org/download.html")
     
-    # Get bot token with proper error handling
-    bot_token = os.getenv('DISCORD_BOT_TOKEN')
-    if not bot_token:
-        print("❌ DISCORD_BOT_TOKEN environment variable not set!")
-        exit(1)
+    # Check for PDF dependencies
+    try:
+        import PyPDF2
+        import fitz  # PyMuPDF
+        print("✅ PDF processing libraries detected")
+    except ImportError:
+        print("⚠️  PDF processing libraries not found")
+        print("Install with: pip install PyPDF2 pymupdf pillow")
     
     try:
-        bot.run(bot_token)
+        bot.run(os.getenv('DISCORD_BOT_TOKEN'))
     except KeyboardInterrupt:
         print("🛑 Bot shutdown requested")
     finally:
