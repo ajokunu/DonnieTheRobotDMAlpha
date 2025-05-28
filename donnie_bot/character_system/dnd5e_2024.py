@@ -1,4 +1,3 @@
-# character_system/dnd5e_2024.py
 """
 D&D 5th Edition 2024 Character System
 Complete implementation following 2024 Player's Handbook rules
@@ -887,100 +886,304 @@ Backstory: {cp['backstory'] if cp['backstory'] else 'To be developed'}
         await interaction.response.send_message(embed=embed)
 
     async def _view_character_sheet_2024(self, interaction, player):
-        """View complete 2024 character sheet"""
-        target_user = player or interaction.user
-        user_id = str(target_user.id)
-        
-        if user_id not in self.campaign_context["characters"]:
+        """View complete 2024 character sheet with robust error handling"""
+        try:
+            target_user = player or interaction.user
+            user_id = str(target_user.id)
+            
+            if user_id not in self.campaign_context["characters"]:
+                embed = discord.Embed(
+                    title="❌ Character Not Found",
+                    description=f"No character registered for {target_user.display_name}. Use `/character` to register!",
+                    color=0xFF6B6B
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            
+            # Get character data with safe access
+            char_data = self.campaign_context["players"][user_id]["character_data"]
+            
+            # Debug logging
+            print(f"DEBUG: Character data keys: {list(char_data.keys())}")
+            print(f"DEBUG: Character name: {char_data.get('name', 'MISSING')}")
+            
+            # Safely get basic character info
+            name = char_data.get('name', 'Unknown Character')
+            species = char_data.get('species', char_data.get('race', 'Unknown'))  # Handle both terminologies
+            char_class = char_data.get('class', 'Unknown')
+            level = char_data.get('level', 1)
+            background = char_data.get('background', 'Unknown')
+            
+            # Create main character sheet embed
             embed = discord.Embed(
-                title="❌ Character Not Found",
-                description=f"No character registered for {target_user.display_name}. Use `/character` to register!",
-                color=0xFF6B6B
+                title=f"📜 D&D 5e 2024 Character Sheet: {name}",
+                description=f"**{species} {char_class}** (Level {level})\n*{background}*",
+                color=0x4169E1
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        # Get character data
-        char_data = self.campaign_context["players"][user_id]["character_data"]
-        
-        # Create main character sheet embed
-        embed = discord.Embed(
-            title=f"📜 D&D 5e 2024 Character Sheet: {char_data['name']}",
-            description=f"**{char_data['species']} {char_data['class']}** (Level {char_data['level']})\n*{char_data['background']}*",
-            color=0x4169E1
-        )
-        
-        # Basic Info
-        embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
-        embed.add_field(name="⭐ Proficiency Bonus", value=f"+{char_data['proficiency_bonus']}", inline=True)
-        embed.add_field(name="🎯 Hit Dice", value=char_data['hit_dice'], inline=True)
-        
-        # Ability Scores with modifiers
-        abilities = []
-        for ability, score in char_data["ability_scores"].items():
-            modifier = self.calculate_ability_modifier(score)
-            save_prof = "✓" if char_data["saving_throws"].get(ability, False) else ""
-            abilities.append(f"**{ability[:3].upper()}** {score} ({modifier:+d}){save_prof}")
-        
-        embed.add_field(
-            name="📊 Ability Scores & Saves (2024)", 
-            value="\n".join(abilities), 
-            inline=True
-        )
-        
-        # Combat Stats
-        hp = char_data["hit_points"]
-        hp_display = f"{hp['current']}/{hp['maximum']}"
-        if hp["temporary"] > 0:
-            hp_display += f" (+{hp['temporary']} temp)"
-        
-        combat_stats = [
-            f"**AC:** {char_data['armor_class']}",
-            f"**HP:** {hp_display}",
-            f"**Speed:** {char_data['speed']} ft"
-        ]
-        
-        embed.add_field(name="⚔️ Combat Stats", value="\n".join(combat_stats), inline=True)
-        
-        # Skills (only show proficient ones)
-        proficient_skills = []
-        for skill, is_proficient in char_data["skills"].items():
-            if is_proficient:
-                skill_name = skill.replace("_", " ").title()
-                skill_abilities = {
-                    "athletics": "strength",
-                    "acrobatics": "dexterity", "sleight_of_hand": "dexterity", "stealth": "dexterity",
-                    "arcana": "intelligence", "history": "intelligence", "investigation": "intelligence", 
-                    "nature": "intelligence", "religion": "intelligence",
-                    "animal_handling": "wisdom", "insight": "wisdom", "medicine": "wisdom", 
-                    "perception": "wisdom", "survival": "wisdom",
-                    "deception": "charisma", "intimidation": "charisma", "performance": "charisma", 
-                    "persuasion": "charisma"
-                }
+            
+            # Basic Info - Safe access
+            embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
+            
+            # Proficiency Bonus - Calculate if missing
+            prof_bonus = char_data.get('proficiency_bonus', self.calculate_proficiency_bonus(level))
+            embed.add_field(name="⭐ Proficiency Bonus", value=f"+{prof_bonus}", inline=True)
+            
+            # Hit Dice - Safe construction
+            hit_dice = char_data.get('hit_dice', f"{level}d8")
+            embed.add_field(name="🎯 Hit Dice", value=hit_dice, inline=True)
+            
+            # Ability Scores with error handling
+            try:
+                ability_scores = char_data.get('ability_scores', {})
+                if not ability_scores:
+                    # Try alternative structures
+                    ability_scores = {
+                        'strength': char_data.get('strength', 10),
+                        'dexterity': char_data.get('dexterity', 10),
+                        'constitution': char_data.get('constitution', 10),
+                        'intelligence': char_data.get('intelligence', 10),
+                        'wisdom': char_data.get('wisdom', 10),
+                        'charisma': char_data.get('charisma', 10)
+                    }
                 
-                ability = skill_abilities.get(skill, "intelligence")
-                ability_mod = self.calculate_ability_modifier(char_data["ability_scores"][ability])
-                skill_bonus = ability_mod + char_data["proficiency_bonus"]
-                proficient_skills.append(f"{skill_name} +{skill_bonus}")
-        
-        if proficient_skills:
-            embed.add_field(name="🎯 Proficient Skills", value="\n".join(proficient_skills), inline=True)
-        
-        # Spellcasting (if applicable)
-        if char_data["spellcasting"]["ability"]:
-            spell_slots = char_data["spellcasting"]["spell_slots"]
-            spell_slots_used = char_data["spell_slots_used"]
+                abilities = []
+                saving_throws = char_data.get("saving_throws", {})
+                
+                for ability in ['strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma']:
+                    score = ability_scores.get(ability, 10)
+                    if isinstance(score, str):
+                        try:
+                            score = int(score)
+                        except:
+                            score = 10
+                    
+                    modifier = self.calculate_ability_modifier(score)
+                    save_prof = "✓" if saving_throws.get(ability, False) else ""
+                    abilities.append(f"**{ability[:3].upper()}** {score} ({modifier:+d}){save_prof}")
+                
+                embed.add_field(
+                    name="📊 Ability Scores & Saves (2024)", 
+                    value="\n".join(abilities), 
+                    inline=True
+                )
+            except Exception as e:
+                print(f"Error processing ability scores: {e}")
+                embed.add_field(name="📊 Ability Scores", value="Error loading ability scores", inline=True)
             
-            slot_display = []
-            for level in ["1st", "2nd", "3rd", "4th", "5th"]:  # Show first 5 levels
-                total = spell_slots[level]
-                used = spell_slots_used[level]
-                if total > 0:
-                    available = total - used
-                    slot_display.append(f"{level}: {available}/{total}")
+            # Combat Stats - Safe access with defaults
+            try:
+                # Handle different HP structures
+                hp_data = char_data.get("hit_points", {})
+                if isinstance(hp_data, dict):
+                    hp_current = hp_data.get('current', hp_data.get('maximum', level * 8))
+                    hp_max = hp_data.get('maximum', level * 8)
+                    hp_temp = hp_data.get('temporary', 0)
+                else:
+                    # Handle simple HP structure
+                    hp_current = char_data.get('hp_current', char_data.get('hp', level * 8))
+                    hp_max = char_data.get('hp_max', char_data.get('hp', level * 8))
+                    hp_temp = char_data.get('hp_temp', 0)
+                
+                hp_display = f"{hp_current}/{hp_max}"
+                if hp_temp > 0:
+                    hp_display += f" (+{hp_temp} temp)"
+                
+                ac = char_data.get('armor_class', char_data.get('ac', 10))
+                speed = char_data.get('speed', 30)
+                
+                combat_stats = [
+                    f"**AC:** {ac}",
+                    f"**HP:** {hp_display}",
+                    f"**Speed:** {speed} ft"
+                ]
+                
+                embed.add_field(name="⚔️ Combat Stats", value="\n".join(combat_stats), inline=True)
+            except Exception as e:
+                print(f"Error processing combat stats: {e}")
+                embed.add_field(name="⚔️ Combat Stats", value="Error loading combat stats", inline=True)
             
-            if slot_display:
-                embed.add_field(name="✨ Spell Slots (2024)", value="\n".join(slot_display), inline=True)
-        
-        embed.set_footer(text="D&D 5e 2024 Rules • Use commands to manage HP, spells, and make rolls!")
-        await interaction.response.send_message(embed=embed)
+            # Skills - Safe processing
+            try:
+                skills = char_data.get("skills", {})
+                proficient_skills = []
+                
+                # Handle different skill data structures
+                if isinstance(skills, list):
+                    # Skills as list of strings
+                    for skill in skills[:10]:  # Limit display
+                        proficient_skills.append(str(skill))
+                elif isinstance(skills, dict):
+                    # Skills as dictionary with proficiency bools
+                    skill_abilities = {
+                        "athletics": "strength",
+                        "acrobatics": "dexterity", "sleight_of_hand": "dexterity", "stealth": "dexterity",
+                        "arcana": "intelligence", "history": "intelligence", "investigation": "intelligence", 
+                        "nature": "intelligence", "religion": "intelligence",
+                        "animal_handling": "wisdom", "insight": "wisdom", "medicine": "wisdom", 
+                        "perception": "wisdom", "survival": "wisdom",
+                        "deception": "charisma", "intimidation": "charisma", "performance": "charisma", 
+                        "persuasion": "charisma"
+                    }
+                    
+                    for skill, is_proficient in skills.items():
+                        if is_proficient:
+                            skill_name = skill.replace("_", " ").title()
+                            ability = skill_abilities.get(skill, "intelligence")
+                            ability_score = ability_scores.get(ability, 10)
+                            ability_mod = self.calculate_ability_modifier(ability_score)
+                            skill_bonus = ability_mod + prof_bonus
+                            proficient_skills.append(f"{skill_name} +{skill_bonus}")
+                elif isinstance(skills, str):
+                    # Skills as comma-separated string
+                    proficient_skills = [s.strip() for s in skills.split(',')[:10]]
+                
+                if proficient_skills:
+                    skills_text = "\n".join(proficient_skills[:8])  # Limit to prevent embed overflow
+                    embed.add_field(name="🎯 Skills", value=skills_text, inline=True)
+            except Exception as e:
+                print(f"Error processing skills: {e}")
+                # Try to show something useful
+                skills_raw = char_data.get("skills", "None")
+                if skills_raw and skills_raw != "None":
+                    embed.add_field(name="🎯 Skills", value=str(skills_raw)[:200], inline=True)
+            
+            # Spellcasting - Safe processing
+            try:
+                spellcasting = char_data.get("spellcasting", {})
+                spellcasting_ability = spellcasting.get("ability")
+                
+                if spellcasting_ability:
+                    spell_slots = spellcasting.get("spell_slots", {})
+                    spell_slots_used = char_data.get("spell_slots_used", {})
+                    
+                    slot_display = []
+                    for level_name in ["1st", "2nd", "3rd", "4th", "5th"]:  # Show first 5 levels
+                        total = spell_slots.get(level_name, 0)
+                        used = spell_slots_used.get(level_name, 0)
+                        if total > 0:
+                            available = total - used
+                            slot_display.append(f"{level_name}: {available}/{total}")
+                    
+                    if slot_display:
+                        embed.add_field(name="✨ Spell Slots (2024)", value="\n".join(slot_display), inline=True)
+                    
+                    # Add spell save DC and attack bonus
+                    save_dc = spellcasting.get("spell_save_dc", 8)
+                    attack_bonus = spellcasting.get("spell_attack_bonus", 0)
+                    embed.add_field(
+                        name="🎭 Spellcasting", 
+                        value=f"**Ability:** {spellcasting_ability.title()}\n**Save DC:** {save_dc}\n**Attack:** +{attack_bonus}",
+                        inline=True
+                    )
+            except Exception as e:
+                print(f"Error processing spellcasting: {e}")
+                # Check if there's any spell info to show
+                spells = char_data.get('spells', '')
+                if spells and spells not in ['None', '']:
+                    embed.add_field(name="✨ Spells", value=str(spells)[:200], inline=True)
+            
+            # Equipment - Safe processing
+            try:
+                equipment = char_data.get("equipment", {})
+                if equipment:
+                    if isinstance(equipment, dict):
+                        # Equipment as structured dict
+                        equip_parts = []
+                        if equipment.get("armor"):
+                            equip_parts.append(f"**Armor:** {equipment['armor']}")
+                        if equipment.get("weapons"):
+                            weapons = equipment["weapons"]
+                            if isinstance(weapons, list):
+                                equip_parts.append(f"**Weapons:** {', '.join(weapons[:3])}")
+                            else:
+                                equip_parts.append(f"**Weapons:** {weapons}")
+                        if equipment.get("other"):
+                            equip_parts.append(f"**Other:** {equipment['other']}")
+                        
+                        if equip_parts:
+                            embed.add_field(name="⚔️ Equipment", value="\n".join(equip_parts)[:400], inline=False)
+                    elif isinstance(equipment, str):
+                        # Equipment as string
+                        if equipment and equipment != "Basic adventuring gear":
+                            embed.add_field(name="⚔️ Equipment", value=equipment[:400], inline=False)
+            except Exception as e:
+                print(f"Error processing equipment: {e}")
+                # Try to show raw equipment data
+                equip_raw = char_data.get("equipment", "")
+                if equip_raw:
+                    embed.add_field(name="⚔️ Equipment", value=str(equip_raw)[:200], inline=False)
+            
+            # Character traits and features
+            try:
+                # Species traits
+                species_traits = char_data.get("species_traits", [])
+                if species_traits:
+                    traits_text = ", ".join(species_traits[:5])  # Show first 5
+                    if len(species_traits) > 5:
+                        traits_text += f" + {len(species_traits) - 5} more"
+                    embed.add_field(name=f"🧬 {species.title()} Traits", value=traits_text[:200], inline=True)
+                
+                # Class features
+                class_features = char_data.get("class_features", [])
+                if class_features:
+                    features_text = ", ".join(class_features[:3])  # Show first 3
+                    if len(class_features) > 3:
+                        features_text += f" + {len(class_features) - 3} more"
+                    embed.add_field(name=f"⚡ {char_class} Features", value=features_text[:200], inline=True)
+            except Exception as e:
+                print(f"Error processing traits/features: {e}")
+            
+            # Personality (if available)
+            try:
+                personality = char_data.get("personality", "")
+                if personality and personality != "To be determined":
+                    embed.add_field(name="🎭 Personality", value=personality[:300], inline=False)
+            except Exception as e:
+                print(f"Error processing personality: {e}")
+            
+            embed.set_footer(text="D&D 5e 2024 Rules • Use commands to manage HP, spells, and make rolls!")
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            print(f"CRITICAL ERROR in _view_character_sheet_2024: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Emergency fallback - show raw character data
+            try:
+                char_data = self.campaign_context["players"][user_id]["character_data"]
+                debug_embed = discord.Embed(
+                    title="🔧 Debug: Character Data Structure",
+                    description="There was an error displaying the character sheet. Here's the raw data:",
+                    color=0xFF6B6B
+                )
+                
+                # Show basic info that should always exist
+                debug_embed.add_field(name="Name", value=str(char_data.get('name', 'Unknown')), inline=True)
+                debug_embed.add_field(name="Keys", value=str(list(char_data.keys())[:10]), inline=False)
+                
+                # Show a sample of the data
+                for key, value in list(char_data.items())[:5]:
+                    debug_embed.add_field(name=str(key), value=str(value)[:100], inline=True)
+                
+                debug_embed.set_footer(text="Please report this error to the admin with this debug info")
+                
+                try:
+                    await interaction.response.send_message(embed=debug_embed, ephemeral=True)
+                except:
+                    await interaction.followup.send(embed=debug_embed, ephemeral=True)
+                    
+            except Exception as debug_error:
+                print(f"Even debug display failed: {debug_error}")
+                
+                # Absolute last resort
+                try:
+                    await interaction.response.send_message(
+                        "❌ Critical error displaying character sheet. Please re-register your character.", 
+                        ephemeral=True
+                    )
+                except:
+                    await interaction.followup.send(
+                        "❌ Critical error displaying character sheet. Please re-register your character.", 
+                        ephemeral=True
+                    )
