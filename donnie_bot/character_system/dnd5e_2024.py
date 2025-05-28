@@ -41,17 +41,17 @@ class DnD5e2024CharacterSystem:
             charisma="Charisma score (8-20)"
         )
         async def register_character_2024(interaction: discord.Interaction, 
-                               name: str,
-                               species: str,
-                               character_class: str,
-                               level: int,
-                               background: Optional[str] = None,
-                               strength: Optional[int] = None,
-                               dexterity: Optional[int] = None,
-                               constitution: Optional[int] = None,
-                               intelligence: Optional[int] = None,
-                               wisdom: Optional[int] = None,
-                               charisma: Optional[int] = None):
+                           name: str,
+                           species: str,
+                           character_class: str,
+                           level: int,
+                           background: Optional[str] = None,
+                           strength: Optional[int] = None,
+                           dexterity: Optional[int] = None,
+                           constitution: Optional[int] = None,
+                           intelligence: Optional[int] = None,
+                           wisdom: Optional[int] = None,
+                           charisma: Optional[int] = None):
             await self._register_character(interaction, name, species, character_class, level,
                                          background, strength, dexterity, constitution,
                                          intelligence, wisdom, charisma)
@@ -75,114 +75,9 @@ class DnD5e2024CharacterSystem:
                                   appearance: Optional[str] = None):
             await self._set_character_details(interaction, personality, ideals, bonds, flaws, backstory, appearance)
         
-        # HP Management
-        @self.bot.tree.command(name="manage_hp", description="Manage hit points (damage, healing, rests)")
-        @app_commands.describe(
-            action="What to do with HP",
-            amount="Amount of HP to change",
-            temporary="Temporary HP to add (optional)"
-        )
-        @app_commands.choices(action=[
-            app_commands.Choice(name="Take Damage", value="damage"),
-            app_commands.Choice(name="Heal", value="heal"),
-            app_commands.Choice(name="Set Current HP", value="set"),
-            app_commands.Choice(name="Add Temporary HP", value="temp"),
-            app_commands.Choice(name="Long Rest", value="long_rest"),
-            app_commands.Choice(name="Short Rest", value="short_rest")
-        ])
-        async def manage_hp(interaction: discord.Interaction, action: str, amount: Optional[int] = None, temporary: Optional[int] = None):
-            await self._manage_hp(interaction, action, amount, temporary)
+
         
-        # Spell Slot Management
-        @self.bot.tree.command(name="manage_spell_slots", description="Manage spell slots (2024 rules)")
-        @app_commands.describe(
-            action="What to do with spell slots",
-            spell_level="Spell slot level (1-9)",
-            amount="Number of slots to use/restore"
-        )
-        @app_commands.choices(action=[
-            app_commands.Choice(name="Use Spell Slot", value="use"),
-            app_commands.Choice(name="Restore Spell Slot", value="restore"),
-            app_commands.Choice(name="Long Rest (Restore All)", value="long_rest"),
-            app_commands.Choice(name="View Spell Slots", value="view")
-        ])
-        async def manage_spell_slots(interaction: discord.Interaction, action: str, 
-                                   spell_level: Optional[int] = None, amount: Optional[int] = 1):
-            await self._manage_spell_slots(interaction, action, spell_level, amount)
-        
-        # Ability Checks
-        @self.bot.tree.command(name="ability_check", description="Make an ability check or skill check (2024 rules)")
-        @app_commands.describe(
-            ability="Which ability to use",
-            skill="Specific skill (optional)",
-            test_type="Normal, Advantage, or Disadvantage",
-            modifier="Additional modifier to add"
-        )
-        @app_commands.choices(
-            ability=[
-                app_commands.Choice(name="Strength", value="strength"),
-                app_commands.Choice(name="Dexterity", value="dexterity"),
-                app_commands.Choice(name="Constitution", value="constitution"),
-                app_commands.Choice(name="Intelligence", value="intelligence"),
-                app_commands.Choice(name="Wisdom", value="wisdom"),
-                app_commands.Choice(name="Charisma", value="charisma")
-            ],
-            skill=[
-                app_commands.Choice(name="Athletics", value="athletics"),
-                app_commands.Choice(name="Acrobatics", value="acrobatics"),
-                app_commands.Choice(name="Sleight of Hand", value="sleight_of_hand"),
-                app_commands.Choice(name="Stealth", value="stealth"),
-                app_commands.Choice(name="Arcana", value="arcana"),
-                app_commands.Choice(name="History", value="history"),
-                app_commands.Choice(name="Investigation", value="investigation"),
-                app_commands.Choice(name="Nature", value="nature"),
-                app_commands.Choice(name="Religion", value="religion"),
-                app_commands.Choice(name="Animal Handling", value="animal_handling"),
-                app_commands.Choice(name="Insight", value="insight"),
-                app_commands.Choice(name="Medicine", value="medicine"),
-                app_commands.Choice(name="Perception", value="perception"),
-                app_commands.Choice(name="Survival", value="survival"),
-                app_commands.Choice(name="Deception", value="deception"),
-                app_commands.Choice(name="Intimidation", value="intimidation"),
-                app_commands.Choice(name="Performance", value="performance"),
-                app_commands.Choice(name="Persuasion", value="persuasion")
-            ],
-            test_type=[
-                app_commands.Choice(name="Normal", value="normal"),
-                app_commands.Choice(name="Advantage", value="advantage"),
-                app_commands.Choice(name="Disadvantage", value="disadvantage")
-            ]
-        )
-        async def ability_check(interaction: discord.Interaction, ability: str, 
-                              skill: Optional[str] = None, test_type: Optional[str] = "normal",
-                              modifier: Optional[int] = 0):
-            await self._ability_check(interaction, ability, skill, test_type, modifier)
-        
-        # Saving Throws
-        @self.bot.tree.command(name="saving_throw", description="Make a saving throw (2024 rules)")
-        @app_commands.describe(
-            ability="Which saving throw to make",
-            test_type="Normal, Advantage, or Disadvantage",
-            modifier="Additional modifier to add"
-        )
-        @app_commands.choices(
-            ability=[
-                app_commands.Choice(name="Strength", value="strength"),
-                app_commands.Choice(name="Dexterity", value="dexterity"),
-                app_commands.Choice(name="Constitution", value="constitution"),
-                app_commands.Choice(name="Intelligence", value="intelligence"),
-                app_commands.Choice(name="Wisdom", value="wisdom"),
-                app_commands.Choice(name="Charisma", value="charisma")
-            ],
-            test_type=[
-                app_commands.Choice(name="Normal", value="normal"),
-                app_commands.Choice(name="Advantage", value="advantage"),
-                app_commands.Choice(name="Disadvantage", value="disadvantage")
-            ]
-        )
-        async def saving_throw(interaction: discord.Interaction, ability: str,
-                             test_type: Optional[str] = "normal", modifier: Optional[int] = 0):
-            await self._saving_throw(interaction, ability, test_type, modifier)
+
         
         # Character Sheet Display
         @self.bot.tree.command(name="character_sheet_2024", description="View complete D&D 5e 2024 character sheet")
@@ -558,335 +453,12 @@ Backstory: {cp['backstory'] if cp['backstory'] else 'To be developed'}
         
         await interaction.response.send_message(embed=embed)
 
-    async def _manage_hp(self, interaction, action, amount, temporary):
-        """Manage hit points with 2024 rules"""
-        user_id = str(interaction.user.id)
-        
-        if user_id not in self.campaign_context["characters"]:
-            await interaction.response.send_message("❌ No character registered!", ephemeral=True)
-            return
-        
-        char_data = self.campaign_context["players"][user_id]["character_data"]
-        hp = char_data["hit_points"]
-        
-        old_hp = hp["current"]
-        
-        if action == "damage":
-            if amount is None:
-                await interaction.response.send_message("❌ Please specify damage amount!", ephemeral=True)
-                return
-            
-            # Apply damage (temp HP first, then regular HP)
-            remaining_damage = amount
-            if hp["temporary"] > 0:
-                temp_damage = min(remaining_damage, hp["temporary"])
-                hp["temporary"] -= temp_damage
-                remaining_damage -= temp_damage
-            
-            if remaining_damage > 0:
-                hp["current"] = max(0, hp["current"] - remaining_damage)
-        
-        elif action == "heal":
-            if amount is None:
-                await interaction.response.send_message("❌ Please specify heal amount!", ephemeral=True)
-                return
-            hp["current"] = min(hp["maximum"], hp["current"] + amount)
-        
-        elif action == "set":
-            if amount is None:
-                await interaction.response.send_message("❌ Please specify HP amount!", ephemeral=True)
-                return
-            hp["current"] = max(0, min(hp["maximum"], amount))
-        
-        elif action == "temp":
-            if temporary is None:
-                await interaction.response.send_message("❌ Please specify temporary HP amount!", ephemeral=True)
-                return
-            hp["temporary"] = max(hp["temporary"], temporary)  # Temp HP doesn't stack
-        
-        elif action == "long_rest":
-            hp["current"] = hp["maximum"]
-            hp["temporary"] = 0
-            # Also restore spell slots
-            char_data["spell_slots_used"] = {"1st": 0, "2nd": 0, "3rd": 0, "4th": 0, "5th": 0, "6th": 0, "7th": 0, "8th": 0, "9th": 0}
-        
-        elif action == "short_rest":
-            # 2024 short rest rules
-            if amount is None:
-                amount = max(1, char_data["level"] // 2)  # Default to half hit dice
-            
-            hit_die = int(char_data["hit_dice"].split('d')[1])
-            con_mod = self.calculate_ability_modifier(char_data["ability_scores"]["constitution"])
-            
-            # Roll hit dice for healing
-            healing = 0
-            for _ in range(min(amount, char_data["level"])):
-                healing += random.randint(1, hit_die) + con_mod
-            
-            hp["current"] = min(hp["maximum"], hp["current"] + healing)
-            amount = healing  # For display purposes
-        
-        # Update character description
-        character_description = self._create_character_description_2024(char_data)
-        self.campaign_context["characters"][user_id] = character_description
-        self.campaign_context["players"][user_id]["character_description"] = character_description
-        
-        # Create response
-        embed = discord.Embed(
-            title=f"💖 {char_data['name']} - HP Updated",
-            color=0x32CD32 if hp["current"] > old_hp else 0xFF6B6B if hp["current"] < old_hp else 0xFFD700
-        )
-        
-        hp_display = f"{hp['current']}/{hp['maximum']}"
-        if hp["temporary"] > 0:
-            hp_display += f" (+{hp['temporary']} temp)"
-        
-        embed.add_field(name="Current HP", value=hp_display, inline=True)
-        
-        if action == "damage":
-            embed.add_field(name="Damage Taken", value=f"{amount} damage", inline=True)
-        elif action == "heal":
-            embed.add_field(name="Healing", value=f"Healed {amount} HP", inline=True)
-        elif action == "short_rest":
-            embed.add_field(name="Short Rest", value=f"Healed {amount} HP from hit dice", inline=True)
-        elif action == "long_rest":
-            embed.add_field(name="Long Rest", value="Fully healed! All spell slots restored!", inline=True)
-        
-        await interaction.response.send_message(embed=embed)
 
-    async def _manage_spell_slots(self, interaction, action, spell_level, amount):
-        """Manage spell slots with 2024 progression"""
-        user_id = str(interaction.user.id)
-        
-        if user_id not in self.campaign_context["characters"]:
-            await interaction.response.send_message("❌ No character registered!", ephemeral=True)
-            return
-        
-        char_data = self.campaign_context["players"][user_id]["character_data"]
-        
-        if not char_data["spellcasting"]["ability"]:
-            await interaction.response.send_message("❌ Your character is not a spellcaster!", ephemeral=True)
-            return
-        
-        spell_slots = char_data["spellcasting"]["spell_slots"]
-        spell_slots_used = char_data["spell_slots_used"]
-        
-        if action == "view":
-            embed = discord.Embed(
-                title=f"✨ {char_data['name']} - Spell Slots (2024)",
-                color=0x9932CC
-            )
-            
-            slot_display = []
-            for level in ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"]:
-                total = spell_slots[level]
-                used = spell_slots_used[level]
-                if total > 0:
-                    available = total - used
-                    slot_emoji = "🔵" if available == total else "🟡" if available > 0 else "🔴"
-                    slot_display.append(f"{slot_emoji} **{level}:** {available}/{total}")
-            
-            if slot_display:
-                embed.add_field(name="Available Spell Slots", value="\n".join(slot_display), inline=False)
-            else:
-                embed.add_field(name="Spell Slots", value="No spell slots available", inline=False)
-            
-            embed.add_field(
-                name="Spellcasting Info (2024)",
-                value=f"**Ability:** {char_data['spellcasting']['ability'].title()}\n**Save DC:** {char_data['spellcasting']['spell_save_dc']}\n**Attack Bonus:** +{char_data['spellcasting']['spell_attack_bonus']}",
-                inline=False
-            )
-            
-            await interaction.response.send_message(embed=embed)
-            return
-        
-        if spell_level is None or spell_level < 1 or spell_level > 9:
-            await interaction.response.send_message("❌ Please specify a valid spell level (1-9)!", ephemeral=True)
-            return
-        
-        level_key = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"][spell_level - 1]
-        
-        if action == "long_rest":
-            # Restore all spell slots
-            for level in spell_slots_used:
-                spell_slots_used[level] = 0
-            
-            embed = discord.Embed(
-                title=f"✨ {char_data['name']} - Long Rest",
-                description="All spell slots restored!",
-                color=0x32CD32
-            )
-        
-        elif action == "use":
-            total_slots = spell_slots[level_key]
-            used_slots = spell_slots_used[level_key]
-            
-            if total_slots == 0:
-                await interaction.response.send_message(f"❌ You don't have any {level_key} level spell slots!", ephemeral=True)
-                return
-            
-            if used_slots + amount > total_slots:
-                await interaction.response.send_message(f"❌ You don't have {amount} {level_key} level spell slots available!", ephemeral=True)
-                return
-            
-            spell_slots_used[level_key] += amount
-            available = total_slots - spell_slots_used[level_key]
-            
-            embed = discord.Embed(
-                title=f"✨ {char_data['name']} - Spell Cast",
-                description=f"Used {amount} {level_key} level spell slot{'s' if amount > 1 else ''}",
-                color=0xFF6B6B
-            )
-            embed.add_field(name=f"{level_key.title()} Level Slots", value=f"{available}/{total_slots} remaining", inline=True)
-        
-        elif action == "restore":
-            used_slots = spell_slots_used[level_key]
-            
-            if used_slots == 0:
-                await interaction.response.send_message(f"❌ You haven't used any {level_key} level spell slots!", ephemeral=True)
-                return
-            
-            restore_amount = min(amount, used_slots)
-            spell_slots_used[level_key] -= restore_amount
-            available = spell_slots[level_key] - spell_slots_used[level_key]
-            
-            embed = discord.Embed(
-                title=f"✨ {char_data['name']} - Spell Slots Restored",
-                description=f"Restored {restore_amount} {level_key} level spell slot{'s' if restore_amount > 1 else ''}",
-                color=0x32CD32
-            )
-            embed.add_field(name=f"{level_key.title()} Level Slots", value=f"{available}/{spell_slots[level_key]} available", inline=True)
-        
-        # Update character description
-        character_description = self._create_character_description_2024(char_data)
-        self.campaign_context["characters"][user_id] = character_description
-        self.campaign_context["players"][user_id]["character_description"] = character_description
-        
-        await interaction.response.send_message(embed=embed)
 
-    async def _ability_check(self, interaction, ability, skill, test_type, modifier):
-        """Make ability check with 2024 rules"""
-        user_id = str(interaction.user.id)
-        
-        if user_id not in self.campaign_context["characters"]:
-            await interaction.response.send_message("❌ No character registered!", ephemeral=True)
-            return
-        
-        char_data = self.campaign_context["players"][user_id]["character_data"]
-        ability_scores = char_data["ability_scores"]
-        
-        # Calculate base modifier
-        base_modifier = self.calculate_ability_modifier(ability_scores[ability])
-        
-        # Add proficiency if applicable
-        proficiency_bonus = char_data["proficiency_bonus"]
-        total_modifier = base_modifier + modifier
-        
-        check_name = ability.title()
-        
-        if skill:
-            # Check if proficient in skill
-            if char_data["skills"].get(skill, False):
-                total_modifier += proficiency_bonus
-            
-            skill_name = skill.replace("_", " ").title()
-            check_name = f"{skill_name} ({ability.title()})"
-        
-        # Roll dice with 2024 advantage/disadvantage rules
-        if test_type == "advantage":
-            roll1 = random.randint(1, 20)
-            roll2 = random.randint(1, 20)
-            roll = max(roll1, roll2)
-            roll_text = f"{roll1}, {roll2} → **{roll}** (advantage)"
-        elif test_type == "disadvantage":
-            roll1 = random.randint(1, 20)
-            roll2 = random.randint(1, 20)
-            roll = min(roll1, roll2)
-            roll_text = f"{roll1}, {roll2} → **{roll}** (disadvantage)"
-        else:
-            roll = random.randint(1, 20)
-            roll_text = f"**{roll}**"
-        
-        total = roll + total_modifier
-        
-        # Create response
-        embed = discord.Embed(
-            title=f"🎲 {char_data['name']} - {check_name} (2024)",
-            color=0x32CD32 if roll == 20 else 0xFF6B6B if roll == 1 else 0x4169E1
-        )
-        
-        modifier_text = f"{total_modifier:+d}" if total_modifier != 0 else "+0"
-        embed.add_field(name="Roll", value=roll_text, inline=True)
-        embed.add_field(name="Modifier", value=modifier_text, inline=True)
-        embed.add_field(name="Total", value=f"**{total}**", inline=True)
-        
-        # Add special results
-        if roll == 20:
-            embed.add_field(name="🎯 Natural 20!", value="Critical success!", inline=False)
-        elif roll == 1:
-            embed.add_field(name="💥 Natural 1!", value="Critical failure!", inline=False)
-        
-        await interaction.response.send_message(embed=embed)
 
-    async def _saving_throw(self, interaction, ability, test_type, modifier):
-        """Make saving throw with 2024 rules"""
-        user_id = str(interaction.user.id)
-        
-        if user_id not in self.campaign_context["characters"]:
-            await interaction.response.send_message("❌ No character registered!", ephemeral=True)
-            return
-        
-        char_data = self.campaign_context["players"][user_id]["character_data"]
-        ability_scores = char_data["ability_scores"]
-        saving_throws = char_data["saving_throws"]
-        
-        # Calculate modifier
-        base_modifier = self.calculate_ability_modifier(ability_scores[ability])
-        total_modifier = base_modifier + modifier
-        
-        # Add proficiency if proficient
-        proficiency_bonus = char_data["proficiency_bonus"]
-        if saving_throws.get(ability, False):
-            total_modifier += proficiency_bonus
-        
-        # Roll dice
-        if test_type == "advantage":
-            roll1 = random.randint(1, 20)
-            roll2 = random.randint(1, 20)
-            roll = max(roll1, roll2)
-            roll_text = f"{roll1}, {roll2} → **{roll}** (advantage)"
-        elif test_type == "disadvantage":
-            roll1 = random.randint(1, 20)
-            roll2 = random.randint(1, 20)
-            roll = min(roll1, roll2)
-            roll_text = f"{roll1}, {roll2} → **{roll}** (disadvantage)"
-        else:
-            roll = random.randint(1, 20)
-            roll_text = f"**{roll}**"
-        
-        total = roll + total_modifier
-        
-        # Create response
-        embed = discord.Embed(
-            title=f"🛡️ {char_data['name']} - {ability.title()} Save (2024)",
-            color=0x32CD32 if roll == 20 else 0xFF6B6B if roll == 1 else 0x4169E1
-        )
-        
-        modifier_text = f"{total_modifier:+d}" if total_modifier != 0 else "+0"
-        embed.add_field(name="Roll", value=roll_text, inline=True)
-        embed.add_field(name="Modifier", value=modifier_text, inline=True)
-        embed.add_field(name="Total", value=f"**{total}**", inline=True)
-        
-        # Add special results
-        if roll == 20:
-            embed.add_field(name="🎯 Natural 20!", value="Critical success!", inline=False)
-        elif roll == 1:
-            embed.add_field(name="💥 Natural 1!", value="Critical failure!", inline=False)
-        
-        await interaction.response.send_message(embed=embed)
 
     async def _view_character_sheet_2024(self, interaction, player):
-        """View complete 2024 character sheet with robust error handling"""
+        """View complete 2024 character sheet with ALL values displayed"""
         try:
             target_user = player or interaction.user
             user_id = str(target_user.id)
@@ -900,290 +472,522 @@ Backstory: {cp['backstory'] if cp['backstory'] else 'To be developed'}
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            # Get character data with safe access
-            char_data = self.campaign_context["players"][user_id]["character_data"]
+            # Get character data with comprehensive PDF data if available
+            player_data = self.campaign_context["players"][user_id]
+            char_data = player_data.get("character_data", {})
+            comprehensive_data = player_data.get("comprehensive_data", {})
             
-            # Debug logging
-            print(f"DEBUG: Character data keys: {list(char_data.keys())}")
-            print(f"DEBUG: Character name: {char_data.get('name', 'MISSING')}")
-            
-            # Safely get basic character info
-            name = char_data.get('name', 'Unknown Character')
-            species = char_data.get('species', char_data.get('race', 'Unknown'))  # Handle both terminologies
-            char_class = char_data.get('class', 'Unknown')
-            level = char_data.get('level', 1)
-            background = char_data.get('background', 'Unknown')
-            
-            # Create main character sheet embed
-            embed = discord.Embed(
-                title=f"📜 D&D 5e 2024 Character Sheet: {name}",
-                description=f"**{species} {char_class}** (Level {level})\n*{background}*",
-                color=0x4169E1
-            )
-            
-            # Basic Info - Safe access
-            embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
-            
-            # Proficiency Bonus - Calculate if missing
-            prof_bonus = char_data.get('proficiency_bonus', self.calculate_proficiency_bonus(level))
-            embed.add_field(name="⭐ Proficiency Bonus", value=f"+{prof_bonus}", inline=True)
-            
-            # Hit Dice - Safe construction
-            hit_dice = char_data.get('hit_dice', f"{level}d8")
-            embed.add_field(name="🎯 Hit Dice", value=hit_dice, inline=True)
-            
-            # Ability Scores with error handling
-            try:
-                ability_scores = char_data.get('ability_scores', {})
-                if not ability_scores:
-                    # Try alternative structures
-                    ability_scores = {
-                        'strength': char_data.get('strength', 10),
-                        'dexterity': char_data.get('dexterity', 10),
-                        'constitution': char_data.get('constitution', 10),
-                        'intelligence': char_data.get('intelligence', 10),
-                        'wisdom': char_data.get('wisdom', 10),
-                        'charisma': char_data.get('charisma', 10)
-                    }
+            # Use comprehensive data if available (from PDF), otherwise use legacy data
+            if comprehensive_data:
+                await self._display_comprehensive_character_sheet(interaction, target_user, comprehensive_data)
+            else:
+                await self._display_legacy_character_sheet(interaction, target_user, char_data)
                 
-                abilities = []
-                saving_throws = char_data.get("saving_throws", {})
-                
-                for ability in ['strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma']:
-                    score = ability_scores.get(ability, 10)
-                    if isinstance(score, str):
-                        try:
-                            score = int(score)
-                        except:
-                            score = 10
-                    
-                    modifier = self.calculate_ability_modifier(score)
-                    save_prof = "✓" if saving_throws.get(ability, False) else ""
-                    abilities.append(f"**{ability[:3].upper()}** {score} ({modifier:+d}){save_prof}")
-                
-                embed.add_field(
-                    name="📊 Ability Scores & Saves (2024)", 
-                    value="\n".join(abilities), 
-                    inline=True
-                )
-            except Exception as e:
-                print(f"Error processing ability scores: {e}")
-                embed.add_field(name="📊 Ability Scores", value="Error loading ability scores", inline=True)
-            
-            # Combat Stats - Safe access with defaults
-            try:
-                # Handle different HP structures
-                hp_data = char_data.get("hit_points", {})
-                if isinstance(hp_data, dict):
-                    hp_current = hp_data.get('current', hp_data.get('maximum', level * 8))
-                    hp_max = hp_data.get('maximum', level * 8)
-                    hp_temp = hp_data.get('temporary', 0)
-                else:
-                    # Handle simple HP structure
-                    hp_current = char_data.get('hp_current', char_data.get('hp', level * 8))
-                    hp_max = char_data.get('hp_max', char_data.get('hp', level * 8))
-                    hp_temp = char_data.get('hp_temp', 0)
-                
-                hp_display = f"{hp_current}/{hp_max}"
-                if hp_temp > 0:
-                    hp_display += f" (+{hp_temp} temp)"
-                
-                ac = char_data.get('armor_class', char_data.get('ac', 10))
-                speed = char_data.get('speed', 30)
-                
-                combat_stats = [
-                    f"**AC:** {ac}",
-                    f"**HP:** {hp_display}",
-                    f"**Speed:** {speed} ft"
-                ]
-                
-                embed.add_field(name="⚔️ Combat Stats", value="\n".join(combat_stats), inline=True)
-            except Exception as e:
-                print(f"Error processing combat stats: {e}")
-                embed.add_field(name="⚔️ Combat Stats", value="Error loading combat stats", inline=True)
-            
-            # Skills - Safe processing
-            try:
-                skills = char_data.get("skills", {})
-                proficient_skills = []
-                
-                # Handle different skill data structures
-                if isinstance(skills, list):
-                    # Skills as list of strings
-                    for skill in skills[:10]:  # Limit display
-                        proficient_skills.append(str(skill))
-                elif isinstance(skills, dict):
-                    # Skills as dictionary with proficiency bools
-                    skill_abilities = {
-                        "athletics": "strength",
-                        "acrobatics": "dexterity", "sleight_of_hand": "dexterity", "stealth": "dexterity",
-                        "arcana": "intelligence", "history": "intelligence", "investigation": "intelligence", 
-                        "nature": "intelligence", "religion": "intelligence",
-                        "animal_handling": "wisdom", "insight": "wisdom", "medicine": "wisdom", 
-                        "perception": "wisdom", "survival": "wisdom",
-                        "deception": "charisma", "intimidation": "charisma", "performance": "charisma", 
-                        "persuasion": "charisma"
-                    }
-                    
-                    for skill, is_proficient in skills.items():
-                        if is_proficient:
-                            skill_name = skill.replace("_", " ").title()
-                            ability = skill_abilities.get(skill, "intelligence")
-                            ability_score = ability_scores.get(ability, 10)
-                            ability_mod = self.calculate_ability_modifier(ability_score)
-                            skill_bonus = ability_mod + prof_bonus
-                            proficient_skills.append(f"{skill_name} +{skill_bonus}")
-                elif isinstance(skills, str):
-                    # Skills as comma-separated string
-                    proficient_skills = [s.strip() for s in skills.split(',')[:10]]
-                
-                if proficient_skills:
-                    skills_text = "\n".join(proficient_skills[:8])  # Limit to prevent embed overflow
-                    embed.add_field(name="🎯 Skills", value=skills_text, inline=True)
-            except Exception as e:
-                print(f"Error processing skills: {e}")
-                # Try to show something useful
-                skills_raw = char_data.get("skills", "None")
-                if skills_raw and skills_raw != "None":
-                    embed.add_field(name="🎯 Skills", value=str(skills_raw)[:200], inline=True)
-            
-            # Spellcasting - Safe processing
-            try:
-                spellcasting = char_data.get("spellcasting", {})
-                spellcasting_ability = spellcasting.get("ability")
-                
-                if spellcasting_ability:
-                    spell_slots = spellcasting.get("spell_slots", {})
-                    spell_slots_used = char_data.get("spell_slots_used", {})
-                    
-                    slot_display = []
-                    for level_name in ["1st", "2nd", "3rd", "4th", "5th"]:  # Show first 5 levels
-                        total = spell_slots.get(level_name, 0)
-                        used = spell_slots_used.get(level_name, 0)
-                        if total > 0:
-                            available = total - used
-                            slot_display.append(f"{level_name}: {available}/{total}")
-                    
-                    if slot_display:
-                        embed.add_field(name="✨ Spell Slots (2024)", value="\n".join(slot_display), inline=True)
-                    
-                    # Add spell save DC and attack bonus
-                    save_dc = spellcasting.get("spell_save_dc", 8)
-                    attack_bonus = spellcasting.get("spell_attack_bonus", 0)
-                    embed.add_field(
-                        name="🎭 Spellcasting", 
-                        value=f"**Ability:** {spellcasting_ability.title()}\n**Save DC:** {save_dc}\n**Attack:** +{attack_bonus}",
-                        inline=True
-                    )
-            except Exception as e:
-                print(f"Error processing spellcasting: {e}")
-                # Check if there's any spell info to show
-                spells = char_data.get('spells', '')
-                if spells and spells not in ['None', '']:
-                    embed.add_field(name="✨ Spells", value=str(spells)[:200], inline=True)
-            
-            # Equipment - Safe processing
-            try:
-                equipment = char_data.get("equipment", {})
-                if equipment:
-                    if isinstance(equipment, dict):
-                        # Equipment as structured dict
-                        equip_parts = []
-                        if equipment.get("armor"):
-                            equip_parts.append(f"**Armor:** {equipment['armor']}")
-                        if equipment.get("weapons"):
-                            weapons = equipment["weapons"]
-                            if isinstance(weapons, list):
-                                equip_parts.append(f"**Weapons:** {', '.join(weapons[:3])}")
-                            else:
-                                equip_parts.append(f"**Weapons:** {weapons}")
-                        if equipment.get("other"):
-                            equip_parts.append(f"**Other:** {equipment['other']}")
-                        
-                        if equip_parts:
-                            embed.add_field(name="⚔️ Equipment", value="\n".join(equip_parts)[:400], inline=False)
-                    elif isinstance(equipment, str):
-                        # Equipment as string
-                        if equipment and equipment != "Basic adventuring gear":
-                            embed.add_field(name="⚔️ Equipment", value=equipment[:400], inline=False)
-            except Exception as e:
-                print(f"Error processing equipment: {e}")
-                # Try to show raw equipment data
-                equip_raw = char_data.get("equipment", "")
-                if equip_raw:
-                    embed.add_field(name="⚔️ Equipment", value=str(equip_raw)[:200], inline=False)
-            
-            # Character traits and features
-            try:
-                # Species traits
-                species_traits = char_data.get("species_traits", [])
-                if species_traits:
-                    traits_text = ", ".join(species_traits[:5])  # Show first 5
-                    if len(species_traits) > 5:
-                        traits_text += f" + {len(species_traits) - 5} more"
-                    embed.add_field(name=f"🧬 {species.title()} Traits", value=traits_text[:200], inline=True)
-                
-                # Class features
-                class_features = char_data.get("class_features", [])
-                if class_features:
-                    features_text = ", ".join(class_features[:3])  # Show first 3
-                    if len(class_features) > 3:
-                        features_text += f" + {len(class_features) - 3} more"
-                    embed.add_field(name=f"⚡ {char_class} Features", value=features_text[:200], inline=True)
-            except Exception as e:
-                print(f"Error processing traits/features: {e}")
-            
-            # Personality (if available)
-            try:
-                personality = char_data.get("personality", "")
-                if personality and personality != "To be determined":
-                    embed.add_field(name="🎭 Personality", value=personality[:300], inline=False)
-            except Exception as e:
-                print(f"Error processing personality: {e}")
-            
-            embed.set_footer(text="D&D 5e 2024 Rules • Use commands to manage HP, spells, and make rolls!")
-            await interaction.response.send_message(embed=embed)
-            
         except Exception as e:
             print(f"CRITICAL ERROR in _view_character_sheet_2024: {e}")
             import traceback
             traceback.print_exc()
             
-            # Emergency fallback - show raw character data
+            # Emergency fallback
+            embed = discord.Embed(
+                title="❌ Error Loading Character Sheet",
+                description="There was an error loading the character sheet. Please try again.",
+                color=0xFF6B6B
+            )
+            
             try:
-                char_data = self.campaign_context["players"][user_id]["character_data"]
-                debug_embed = discord.Embed(
-                    title="🔧 Debug: Character Data Structure",
-                    description="There was an error displaying the character sheet. Here's the raw data:",
-                    color=0xFF6B6B
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _display_comprehensive_character_sheet(self, interaction, target_user, comprehensive_data):
+        """Display complete character sheet using comprehensive PDF data"""
+        
+        # Create main embed with character header
+        embed = discord.Embed(
+            title=f"📜 {comprehensive_data.get('name', 'Unknown Character')}",
+            description=f"**{comprehensive_data.get('race', 'Unknown')} {comprehensive_data.get('class', 'Unknown')}** • Level {comprehensive_data.get('level', 1)}",
+            color=0x4169E1
+        )
+        
+        # === BASIC INFORMATION ===
+        basic_info = []
+        basic_info.append(f"**Background:** {comprehensive_data.get('background', 'Unknown')}")
+        basic_info.append(f"**Alignment:** {comprehensive_data.get('alignment', 'Unknown')}")
+        basic_info.append(f"**Experience:** {comprehensive_data.get('experience_points', 0)} XP")
+        basic_info.append(f"**Player:** {target_user.display_name}")
+        
+        embed.add_field(
+            name="📋 Basic Information",
+            value="\n".join(basic_info),
+            inline=False
+        )
+        
+        # === ABILITY SCORES ===
+        abilities = comprehensive_data.get('ability_scores', {})
+        modifiers = comprehensive_data.get('ability_modifiers', {})
+        
+        ability_display = []
+        for ability in ['strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma']:
+            score = abilities.get(ability, 10)
+            modifier = modifiers.get(ability, '+0')
+            ability_display.append(f"**{ability[:3].upper()}** {score} ({modifier})")
+        
+        # Format in two columns like the PDF
+        embed.add_field(
+            name="📊 Ability Scores",
+            value=f"{ability_display[0]}   {ability_display[1]}\n{ability_display[2]}   {ability_display[3]}\n{ability_display[4]}   {ability_display[5]}",
+            inline=True
+        )
+        
+        # === COMBAT STATS ===
+        combat = comprehensive_data.get('combat_stats', {})
+        
+        combat_info = []
+        combat_info.append(f"**Armor Class:** {combat.get('armor_class', 10)}")
+        combat_info.append(f"**Initiative:** {combat.get('initiative', '+0')}")
+        combat_info.append(f"**Speed:** {combat.get('speed', '30 ft')}")
+        combat_info.append(f"**Hit Point Maximum:** {combat.get('hit_point_maximum', 8)}")
+        combat_info.append(f"**Current Hit Points:** {combat.get('current_hit_points', 8)}")
+        if combat.get('temporary_hit_points', 0) > 0:
+            combat_info.append(f"**Temporary HP:** {combat.get('temporary_hit_points', 0)}")
+        combat_info.append(f"**Hit Dice:** {combat.get('hit_dice', '1d8')}")
+        
+        embed.add_field(
+            name="⚔️ Combat Stats",
+            value="\n".join(combat_info),
+            inline=True
+        )
+        
+        # === PROFICIENCIES ===
+        prof = comprehensive_data.get('proficiencies', {})
+        
+        prof_info = []
+        prof_info.append(f"**Proficiency Bonus:** {prof.get('proficiency_bonus', '+2')}")
+        
+        saving_throws = prof.get('saving_throws', [])
+        if saving_throws:
+            prof_info.append(f"**Saving Throws:** {', '.join(saving_throws)}")
+        
+        skills = prof.get('skills', [])
+        if skills:
+            # Limit skills display to prevent overflow
+            skills_display = ', '.join(skills[:8])
+            if len(skills) > 8:
+                skills_display += f" (+{len(skills) - 8} more)"
+            prof_info.append(f"**Skills:** {skills_display}")
+        
+        languages = prof.get('languages', [])
+        if languages:
+            prof_info.append(f"**Languages:** {', '.join(languages)}")
+        
+        embed.add_field(
+            name="🎯 Proficiencies",
+            value="\n".join(prof_info),
+            inline=False
+        )
+        
+        # === EQUIPMENT ===
+        equipment = comprehensive_data.get('equipment', {})
+        
+        equip_sections = []
+        
+        weapons = equipment.get('weapons', [])
+        if weapons:
+            weapons_text = ', '.join(weapons[:5])  # Show first 5 weapons
+            if len(weapons) > 5:
+                weapons_text += f" (+{len(weapons) - 5} more)"
+            equip_sections.append(f"**Weapons:** {weapons_text}")
+        
+        armor = equipment.get('armor', [])
+        if armor:
+            equip_sections.append(f"**Armor:** {', '.join(armor)}")
+        
+        items = equipment.get('items', [])
+        if items:
+            items_text = ', '.join(items[:8])  # Show first 8 items
+            if len(items) > 8:
+                items_text += f" (+{len(items) - 8} more)"
+            equip_sections.append(f"**Items:** {items_text}")
+        
+        treasure = equipment.get('treasure', [])
+        if treasure:
+            equip_sections.append(f"**Treasure:** {', '.join(treasure)}")
+        
+        if equip_sections:
+            embed.add_field(
+                name="🎒 Equipment",
+                value="\n".join(equip_sections),
+                inline=False
+            )
+        
+        # Send first embed
+        await interaction.response.send_message(embed=embed)
+        
+        # === SPELLCASTING (Second Embed) ===
+        spellcasting = comprehensive_data.get('spellcasting', {})
+        if spellcasting.get('spellcasting_class'):
+            spell_embed = discord.Embed(
+                title=f"✨ {comprehensive_data.get('name', 'Character')} - Spellcasting",
+                color=0x9932CC
+            )
+            
+            spell_info = []
+            spell_info.append(f"**Spellcasting Class:** {spellcasting.get('spellcasting_class')}")
+            spell_info.append(f"**Spellcasting Ability:** {spellcasting.get('spellcasting_ability', 'Unknown')}")
+            spell_info.append(f"**Spell Save DC:** {spellcasting.get('spell_save_dc', 8)}")
+            spell_info.append(f"**Spell Attack Bonus:** {spellcasting.get('spell_attack_bonus', '+0')}")
+            
+            spell_embed.add_field(
+                name="🎭 Spellcasting Info",
+                value="\n".join(spell_info),
+                inline=False
+            )
+            
+            # Spell Slots
+            spell_slots = spellcasting.get('spell_slots', {})
+            slot_info = []
+            for level in range(1, 10):
+                level_key = f"level_{level}"
+                if level_key in spell_slots:
+                    slot_data = spell_slots[level_key]
+                    total = slot_data.get('total', 0)
+                    expended = slot_data.get('expended', 0)
+                    if total > 0:
+                        available = total - expended
+                        slot_emoji = "🔵" if available == total else "🟡" if available > 0 else "🔴"
+                        slot_info.append(f"{slot_emoji} **Level {level}:** {available}/{total}")
+            
+            if slot_info:
+                spell_embed.add_field(
+                    name="🔮 Spell Slots",
+                    value="\n".join(slot_info),
+                    inline=True
                 )
-                
-                # Show basic info that should always exist
-                debug_embed.add_field(name="Name", value=str(char_data.get('name', 'Unknown')), inline=True)
-                debug_embed.add_field(name="Keys", value=str(list(char_data.keys())[:10]), inline=False)
-                
-                # Show a sample of the data
-                for key, value in list(char_data.items())[:5]:
-                    debug_embed.add_field(name=str(key), value=str(value)[:100], inline=True)
-                
-                debug_embed.set_footer(text="Please report this error to the admin with this debug info")
-                
-                try:
-                    await interaction.response.send_message(embed=debug_embed, ephemeral=True)
-                except:
-                    await interaction.followup.send(embed=debug_embed, ephemeral=True)
-                    
-            except Exception as debug_error:
-                print(f"Even debug display failed: {debug_error}")
-                
-                # Absolute last resort
-                try:
-                    await interaction.response.send_message(
-                        "❌ Critical error displaying character sheet. Please re-register your character.", 
-                        ephemeral=True
+            
+            # Cantrips
+            cantrips = spellcasting.get('cantrips', [])
+            if cantrips:
+                cantrips_text = ', '.join(cantrips)
+                spell_embed.add_field(
+                    name="🌟 Cantrips",
+                    value=cantrips_text,
+                    inline=False
+                )
+            
+            # Known Spells by Level
+            spells_known = spellcasting.get('spells_known', {})
+            for level in range(1, 10):
+                level_key = f"level_{level}"
+                if level_key in spells_known and spells_known[level_key]:
+                    spells_list = spells_known[level_key]
+                    spells_text = ', '.join(spells_list)
+                    spell_embed.add_field(
+                        name=f"📖 Level {level} Spells",
+                        value=spells_text,
+                        inline=False
                     )
-                except:
-                    await interaction.followup.send(
-                        "❌ Critical error displaying character sheet. Please re-register your character.", 
-                        ephemeral=True
-                    )
+            
+            await interaction.followup.send(embed=spell_embed)
+        
+        # === FEATURES & TRAITS (Third Embed) ===
+        features = comprehensive_data.get('features_and_traits', {})
+        
+        feature_embed = discord.Embed(
+            title=f"🌟 {comprehensive_data.get('name', 'Character')} - Features & Traits",
+            color=0x32CD32
+        )
+        
+        racial_traits = features.get('racial_traits', [])
+        if racial_traits:
+            feature_embed.add_field(
+                name=f"🧬 {comprehensive_data.get('race', 'Racial')} Traits",
+                value=', '.join(racial_traits),
+                inline=False
+            )
+        
+        class_features = features.get('class_features', [])
+        if class_features:
+            feature_embed.add_field(
+                name=f"⚡ {comprehensive_data.get('class', 'Class')} Features",
+                value=', '.join(class_features),
+                inline=False
+            )
+        
+        background_features = features.get('background_features', [])
+        if background_features:
+            feature_embed.add_field(
+                name=f"📚 {comprehensive_data.get('background', 'Background')} Features",
+                value=', '.join(background_features),
+                inline=False
+            )
+        
+        feats = features.get('feats', [])
+        if feats:
+            feature_embed.add_field(
+                name="🏆 Feats",
+                value=', '.join(feats),
+                inline=False
+            )
+        
+        other_features = features.get('other_features', [])
+        if other_features:
+            feature_embed.add_field(
+                name="🔮 Other Features",
+                value=', '.join(other_features),
+                inline=False
+            )
+        
+        # Only send if there are features to show
+        if any([racial_traits, class_features, background_features, feats, other_features]):
+            await interaction.followup.send(embed=feature_embed)
+        
+        # === PERSONALITY & ROLEPLAY (Fourth Embed) ===
+        personality = comprehensive_data.get('personality', {})
+        physical = comprehensive_data.get('physical_description', {})
+        affiliations = comprehensive_data.get('affiliations', {})
+        
+        rp_embed = discord.Embed(
+            title=f"🎭 {comprehensive_data.get('name', 'Character')} - Personality & Background",
+            color=0xFF69B4
+        )
+        
+        # Personality Traits
+        personality_traits = personality.get('personality_traits', [])
+        if personality_traits:
+            rp_embed.add_field(
+                name="😊 Personality Traits",
+                value='\n'.join([f"• {trait}" for trait in personality_traits]),
+                inline=False
+            )
+        
+        # Ideals
+        ideals = personality.get('ideals', [])
+        if ideals:
+            rp_embed.add_field(
+                name="💡 Ideals",
+                value='\n'.join([f"• {ideal}" for ideal in ideals]),
+                inline=False
+            )
+        
+        # Bonds
+        bonds = personality.get('bonds', [])
+        if bonds:
+            rp_embed.add_field(
+                name="🔗 Bonds",
+                value='\n'.join([f"• {bond}" for bond in bonds]),
+                inline=False
+            )
+        
+        # Flaws
+        flaws = personality.get('flaws', [])
+        if flaws:
+            rp_embed.add_field(
+                name="💔 Flaws",
+                value='\n'.join([f"• {flaw}" for flaw in flaws]),
+                inline=False
+            )
+        
+        # Physical Description
+        physical_desc = []
+        if physical.get('age'):
+            physical_desc.append(f"**Age:** {physical['age']}")
+        if physical.get('height'):
+            physical_desc.append(f"**Height:** {physical['height']}")
+        if physical.get('weight'):
+            physical_desc.append(f"**Weight:** {physical['weight']}")
+        if physical.get('eyes'):
+            physical_desc.append(f"**Eyes:** {physical['eyes']}")
+        if physical.get('skin'):
+            physical_desc.append(f"**Skin:** {physical['skin']}")
+        if physical.get('hair'):
+            physical_desc.append(f"**Hair:** {physical['hair']}")
+        
+        if physical_desc:
+            rp_embed.add_field(
+                name="👁️ Physical Description",
+                value='\n'.join(physical_desc),
+                inline=True
+            )
+        
+        if physical.get('appearance'):
+            rp_embed.add_field(
+                name="🖼️ Appearance",
+                value=physical['appearance'],
+                inline=False
+            )
+        
+        # Backstory
+        if personality.get('backstory'):
+            backstory = personality['backstory']
+            if len(backstory) > 1024:
+                backstory = backstory[:1021] + "..."
+            rp_embed.add_field(
+                name="📖 Backstory",
+                value=backstory,
+                inline=False
+            )
+        
+        # Affiliations
+        org_info = []
+        organizations = affiliations.get('organizations', [])
+        if organizations:
+            org_info.append(f"**Organizations:** {', '.join(organizations)}")
+        
+        allies = affiliations.get('allies', [])
+        if allies:
+            org_info.append(f"**Allies:** {', '.join(allies)}")
+        
+        enemies = affiliations.get('enemies', [])
+        if enemies:
+            org_info.append(f"**Enemies:** {', '.join(enemies)}")
+        
+        if org_info:
+            rp_embed.add_field(
+                name="🏛️ Affiliations",
+                value='\n'.join(org_info),
+                inline=False
+            )
+        
+        # Additional Notes
+        if comprehensive_data.get('additional_notes'):
+            notes = comprehensive_data['additional_notes']
+            if len(notes) > 1024:
+                notes = notes[:1021] + "..."
+            rp_embed.add_field(
+                name="📝 Additional Notes",
+                value=notes,
+                inline=False
+            )
+        
+        # Only send if there's personality/roleplay info to show
+        if any([personality_traits, ideals, bonds, flaws, physical_desc, personality.get('backstory'), 
+                organizations, allies, enemies, comprehensive_data.get('additional_notes')]):
+            await interaction.followup.send(embed=rp_embed)
+        
+        # Final embed with footer
+        footer_embed = discord.Embed(
+            title="",
+            description="**D&D 5e 2024 Rules** • Use `/roll` for dice and let the DM manage combat mechanics!",
+            color=0x4169E1
+        )
+        footer_embed.set_footer(text="📄 Character data parsed from PDF upload")
+        
+        await interaction.followup.send(embed=footer_embed)
+
+    async def _display_legacy_character_sheet(self, interaction, target_user, char_data):
+        """Display character sheet using legacy format data"""
+        
+        # Safely get basic character info
+        name = char_data.get('name', 'Unknown Character')
+        species = char_data.get('species', char_data.get('race', 'Unknown'))
+        char_class = char_data.get('class', 'Unknown')
+        level = char_data.get('level', 1)
+        background = char_data.get('background', 'Unknown')
+        
+        # Create main character sheet embed
+        embed = discord.Embed(
+            title=f"📜 D&D 5e 2024 Character Sheet: {name}",
+            description=f"**{species} {char_class}** (Level {level})\n*{background}*",
+            color=0x4169E1
+        )
+        
+        # Basic Info - Safe access
+        embed.add_field(name="👤 Player", value=target_user.display_name, inline=True)
+        
+        # Proficiency Bonus - Calculate if missing
+        prof_bonus = char_data.get('proficiency_bonus', self.calculate_proficiency_bonus(level))
+        embed.add_field(name="⭐ Proficiency Bonus", value=f"+{prof_bonus}", inline=True)
+        
+        # Hit Dice - Safe construction
+        hit_dice = char_data.get('hit_dice', f"{level}d8")
+        embed.add_field(name="🎯 Hit Dice", value=hit_dice, inline=True)
+        
+        # Ability Scores with error handling
+        try:
+            ability_scores = char_data.get('ability_scores', {})
+            if not ability_scores:
+                # Try alternative structures
+                ability_scores = {
+                    'strength': char_data.get('strength', 10),
+                    'dexterity': char_data.get('dexterity', 10),
+                    'constitution': char_data.get('constitution', 10),
+                    'intelligence': char_data.get('intelligence', 10),
+                    'wisdom': char_data.get('wisdom', 10),
+                    'charisma': char_data.get('charisma', 10)
+                }
+            
+            abilities = []
+            saving_throws = char_data.get("saving_throws", {})
+            
+            for ability in ['strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma']:
+                score = ability_scores.get(ability, 10)
+                if isinstance(score, str):
+                    try:
+                        score = int(score)
+                    except:
+                        score = 10
+                
+                modifier = self.calculate_ability_modifier(score)
+                save_prof = "✓" if saving_throws.get(ability, False) else ""
+                abilities.append(f"**{ability[:3].upper()}** {score} ({modifier:+d}){save_prof}")
+            
+            embed.add_field(
+                name="📊 Ability Scores & Saves (2024)", 
+                value="\n".join(abilities), 
+                inline=True
+            )
+        except Exception as e:
+            print(f"Error processing ability scores: {e}")
+            embed.add_field(name="📊 Ability Scores", value="Error loading ability scores", inline=True)
+        
+        # Combat Stats - Safe access with defaults
+        try:
+            # Handle different HP structures
+            hp_data = char_data.get("hit_points", {})
+            if isinstance(hp_data, dict):
+                hp_current = hp_data.get('current', hp_data.get('maximum', level * 8))
+                hp_max = hp_data.get('maximum', level * 8)
+                hp_temp = hp_data.get('temporary', 0)
+            else:
+                # Handle simple HP structure
+                hp_current = char_data.get('hp_current', char_data.get('hp', level * 8))
+                hp_max = char_data.get('hp_max', char_data.get('hp', level * 8))
+                hp_temp = char_data.get('hp_temp', 0)
+            
+            hp_display = f"{hp_current}/{hp_max}"
+            if hp_temp > 0:
+                hp_display += f" (+{hp_temp} temp)"
+            
+            ac = char_data.get('armor_class', char_data.get('ac', 10))
+            speed = char_data.get('speed', 30)
+            
+            combat_stats = [
+                f"**AC:** {ac}",
+                f"**HP:** {hp_display}",
+                f"**Speed:** {speed} ft"
+            ]
+            
+            embed.add_field(name="⚔️ Combat Stats", value="\n".join(combat_stats), inline=True)
+        except Exception as e:
+            print(f"Error processing combat stats: {e}")
+            embed.add_field(name="⚔️ Combat Stats", value="Error loading combat stats", inline=True)
+        
+        # Equipment - Safe processing
+        try:
+            equipment = char_data.get("equipment", "")
+            if equipment and equipment != "Basic adventuring gear":
+                embed.add_field(name="⚔️ Equipment", value=equipment[:400], inline=False)
+        except Exception as e:
+            print(f"Error processing equipment: {e}")
+        
+        # Personality (if available)
+        try:
+            personality = char_data.get("personality", "")
+            if personality and personality != "To be determined":
+                embed.add_field(name="🎭 Personality", value=personality[:300], inline=False)
+        except Exception as e:
+            print(f"Error processing personality: {e}")
+        
+        embed.set_footer(text="D&D 5e 2024 Rules • Use commands to manage HP, spells, and make rolls!")
+        await interaction.response.send_message(embed=embed)
