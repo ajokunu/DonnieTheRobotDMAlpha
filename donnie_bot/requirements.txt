@@ -7,3 +7,5 @@ wave
 PyPDF2
 pymupdf
 pillow
+pydub 
+pathlib2

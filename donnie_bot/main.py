@@ -20,6 +20,14 @@ from episode_manager.episode_commands import EpisodeCommands
 from character_tracker.progression import CharacterProgressionCommands
 from character_system import DnD5e2024CharacterSystem
 
+# Enhanced Voice System Import
+try:
+    from audio_system.enhanced_voice_manager import EnhancedVoiceManager
+    ENHANCED_VOICE_AVAILABLE = True
+except ImportError:
+    print("⚠️  Enhanced voice system not available - falling back to basic voice")
+    ENHANCED_VOICE_AVAILABLE = False
+
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
@@ -36,29 +44,8 @@ tts_enabled = {}  # Track TTS status per guild
 voice_speed = {}  # Track speech speed per guild (default 1.25)
 voice_queue = {}  # Voice queue per guild to prevent overlapping
 
-# DM Thinking Sounds - ACTUAL sounds, not descriptions
-DM_THINKING_SOUNDS = [
-    "...Hhhhhmm...",
-    "...Aaahhh okay let's try",  # actual throat clearing sound
-    "...Uhhhh...huh yes okay...",
-    "...Let meeee see...",
-    "...Mmm-hmm...",
-    "...Ah, okay then...",
-    "...Right well okay...",
-    "...Well...",
-    "...Okay...",
-    "...Hmm, hmm...",
-    "...Uh-huh...", 
-    "...Mmm...",
-    "...Oh...",
-    "...Alright...",
-    "...Err...",
-    "...Umm...",
-    "...Ah-huh...",
-    "...Hmmph...",
-    "...alright, alright, alright...",
-    "...Let me think...",
-]
+# Enhanced voice manager (will be initialized in on_ready)
+enhanced_voice = None
 
 # Enhanced Storm King's Thunder Campaign Context with Episode Management
 campaign_context = {
@@ -191,212 +178,15 @@ async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.2
         print(f"TTS generation error: {e}")
         return None
 
-def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
-    """
-    Create TTS version and return both the spoken version and any continuation needed
-    Returns: (tts_text, continuation_text)
-    """
-    import re
-    
-    original_text = full_text
-    tts_text = full_text
-    
-    # Light cleanup - preserve the core message
-    tts_text = re.sub(r'\b(very|quite|rather|extremely|incredibly|tremendously)\s+', '', tts_text)
-    tts_text = re.sub(r'\b(suddenly|immediately|quickly|slowly)\s+', '', tts_text)
-    tts_text = re.sub(r',\s+and\s+', ' and ', tts_text)
-    tts_text = re.sub(r'\([^)]*\)', '', tts_text)
-    tts_text = re.sub(r'\s+', ' ', tts_text).strip()
-    
-    continuation_text = ""
-    
-    # Check if we need to truncate for TTS speed - be more conservative
-    if len(tts_text) > 400:  # Raised threshold to avoid unnecessary splits
-        sentences = tts_text.split('. ')
-        
-        # Look for STRONG natural stopping points only
-        natural_break_index = None
-        for i, sentence in enumerate(sentences):
-            # Only split at very clear breaks - questions or direct requests
-            if any(indicator in sentence.lower() for indicator in [
-                'what do you do?', 'roll a', 'make a', 'roll for', '?'
-            ]) and i > 0:  # Don't split at the very first sentence
-                natural_break_index = i + 1
-                break
-        
-        # If we found a STRONG natural break, use it
-        if natural_break_index and natural_break_index < len(sentences):
-            spoken_sentences = sentences[:natural_break_index]
-            remaining_sentences = sentences[natural_break_index:]
-            
-            tts_text = '. '.join(spoken_sentences) + '.'
-            if remaining_sentences:
-                continuation_text = '. '.join(remaining_sentences) + '.'
-        
-        # Only split at sentence boundaries if really long (500+ chars)
-        elif len(tts_text) > 500 and len(sentences) > 3:
-            # Take first half of sentences, but ensure we don't split mid-thought
-            split_point = min(len(sentences) // 2, 3)  # Max 3 sentences in first part
-            
-            spoken_sentences = sentences[:split_point] 
-            remaining_sentences = sentences[split_point:]
-            
-            tts_text = '. '.join(spoken_sentences) + '.'
-            if remaining_sentences:
-                continuation_text = '. '.join(remaining_sentences) + '.'
-    
-    # Clean up continuation text
-    if continuation_text:
-        continuation_text = continuation_text.strip()
-        
-        # Make sure continuation starts properly
-        if continuation_text and not continuation_text[0].isupper():
-            continuation_text = continuation_text[0].upper() + continuation_text[1:]
-        
-        # Remove any duplicate content between tts_text and continuation_text
-        continuation_text = remove_duplicate_content(tts_text, continuation_text)
-    
-    return tts_text, continuation_text
-
-def remove_duplicate_content(first_part: str, second_part: str) -> str:
-    """Remove duplicate sentences between first and second part"""
-    if not second_part:
-        return ""
-    
-    # Split both parts into sentences
-    first_sentences = [s.strip() for s in first_part.split('.') if s.strip()]
-    second_sentences = [s.strip() for s in second_part.split('.') if s.strip()]
-    
-    # Remove sentences from second part that appear in first part
-    unique_sentences = []
-    for sentence in second_sentences:
-        # Check if this sentence (or very similar) appears in first part
-        is_duplicate = False
-        for first_sentence in first_sentences:
-            # Check for exact match or high similarity
-            if (sentence.lower() in first_sentence.lower() or 
-                first_sentence.lower() in sentence.lower() or
-                sentence == first_sentence):
-                is_duplicate = True
-                break
-        
-        if not is_duplicate:
-            unique_sentences.append(sentence)
-    
-    # Rebuild continuation text
-    if unique_sentences:
-        return '. '.join(unique_sentences) + '.'
-    else:
-        return ""  # Return empty if all content was duplicate
-
-async def send_continuation_if_needed(message, full_dm_response: str, tts_text: str, 
-                                    continuation_text: str, guild_id: int, character_name: str):
-    """Send continuation message if the response was truncated"""
-    if not continuation_text or len(continuation_text.strip()) < 10:
-        return
-    
-    # Wait a moment for the TTS to finish or get close to finishing
-    await asyncio.sleep(3)
-    
-    # Create continuation embed
-    embed = discord.Embed(color=0x2E8B57)
-    embed.add_field(
-        name="🐉 Donnie continues...",
-        value=continuation_text,
-        inline=False
-    )
-    embed.set_footer(text="💬 Response continuation")
-    
-    # Send as follow-up
-    try:
-        await message.channel.send(embed=embed)
-        
-        # Add continuation to voice queue if voice is active
-        voice_will_speak = (guild_id in voice_clients and 
-                           voice_clients[guild_id].is_connected() and 
-                           tts_enabled.get(guild_id, False))
-        
-        if voice_will_speak:
-            await add_to_voice_queue(guild_id, continuation_text, f"{character_name} (continued)")
-            
-    except Exception as e:
-        print(f"Error sending continuation: {e}")
-
-async def play_thinking_sound(guild_id: int, character_name: str):
-    """Play a random DM thinking sound immediately to fill waiting time"""
-    if (guild_id not in voice_clients or 
-        not voice_clients[guild_id].is_connected() or 
-        not tts_enabled.get(guild_id, False)):
-        return
-    
-    # Choose a random thinking sound
-    thinking_sound = random.choice(DM_THINKING_SOUNDS)
-    
-    # Add some character-specific context occasionally
-    if random.random() < 0.3:  # 30% chance
-        character_variations = [
-            f"So {character_name}...",
-            f"Hmm, {character_name}...",
-            f"Alright {character_name}, let me see...",
-            f"Well {character_name}...",
-        ]
-        thinking_sound = random.choice(character_variations)
-    
-    # Play immediately without queue (these are quick filler sounds)
-    await speak_thinking_sound_directly(guild_id, thinking_sound)
-
-async def speak_thinking_sound_directly(guild_id: int, text: str):
-    """Play thinking sound directly without queue system - for immediate feedback"""
-    if guild_id not in voice_clients or not tts_enabled.get(guild_id, False):
-        return
-    
-    voice_client = voice_clients[guild_id]
-    if not voice_client or not voice_client.is_connected():
-        return
-    
-    # Use faster speed for thinking sounds to keep them brief
-    speed = voice_speed.get(guild_id, 1.25) * 1.2  # 20% faster for thinking sounds
-    
-    try:
-        # Generate TTS audio quickly
-        audio_data = await generate_tts_audio(text, voice="fable", speed=speed)
-        if not audio_data:
-            return
-        
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
-            temp_file.write(audio_data.getvalue())
-            temp_filename = temp_file.name
-        
-        # Play immediately if not currently playing
-        if not voice_client.is_playing():
-            audio_source = discord.FFmpegPCMAudio(temp_filename)
-            voice_client.play(audio_source)
-            
-            # Wait for this short sound to finish
-            while voice_client.is_playing():
-                await asyncio.sleep(0.1)
-        
-        # Clean up temp file
-        try:
-            os.unlink(temp_filename)
-        except:
-            pass
-            
-    except Exception as e:
-        print(f"Thinking sound error: {e}")
-
+# Simplified voice queue functions for backwards compatibility
 async def process_voice_queue(guild_id: int):
-    """Process voice queue to prevent overlapping speech"""
+    """Simplified voice queue processing"""
     if guild_id not in voice_queue:
         voice_queue[guild_id] = []
     
     while voice_queue[guild_id]:
-        # Get next item in queue
         queue_item = voice_queue[guild_id].pop(0)
         text = queue_item['text']
-        message = queue_item.get('message')
-        player_name = queue_item.get('player_name', 'Unknown')
         
         # Check if voice is still enabled and connected
         if (guild_id not in voice_clients or 
@@ -404,26 +194,12 @@ async def process_voice_queue(guild_id: int):
             not tts_enabled.get(guild_id, False)):
             continue
         
-        # Update message to show this player is speaking
-        if message:
-            try:
-                embed = message.embeds[0]
-                for i, field in enumerate(embed.fields):
-                    if field.name == "🎤":
-                        embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {player_name}*", inline=False)
-                        break
-                await message.edit(embed=embed)
-            except:
-                pass
-        
-        # Generate and play TTS
+        # Generate and play TTS using existing function
         await speak_text_directly(guild_id, text)
-        
-        # Small pause between voice lines
         await asyncio.sleep(0.5)
 
 async def speak_text_directly(guild_id: int, text: str):
-    """Generate TTS and play directly without queue management"""
+    """Simplified TTS playback"""
     if guild_id not in voice_clients or not tts_enabled.get(guild_id, False):
         return
     
@@ -431,14 +207,10 @@ async def speak_text_directly(guild_id: int, text: str):
     if not voice_client or not voice_client.is_connected():
         return
     
-    # Get guild-specific speed or use default
     speed = voice_speed.get(guild_id, 1.25)
     
-    # Create optimized version for TTS (shorter = faster)
-    tts_text, _ = create_tts_version_with_continuation(text)  # We only want the first part for voice
-    
-    # Generate TTS audio with optimized text
-    audio_data = await generate_tts_audio(tts_text, voice="fable", speed=speed)
+    # Use existing generate_tts_audio function
+    audio_data = await generate_tts_audio(text, voice="fable", speed=speed)
     if not audio_data:
         return
     
@@ -448,54 +220,35 @@ async def speak_text_directly(guild_id: int, text: str):
         temp_filename = temp_file.name
     
     try:
-        # Wait for any current audio to finish
         while voice_client.is_playing():
             await asyncio.sleep(0.1)
         
-        # Play audio in voice channel
         audio_source = discord.FFmpegPCMAudio(temp_filename)
         voice_client.play(audio_source)
         
-        # Wait for audio to finish
         while voice_client.is_playing():
             await asyncio.sleep(0.5)
             
     except Exception as e:
         print(f"Audio playback error: {e}")
     finally:
-        # Clean up temp file
         try:
             os.unlink(temp_filename)
         except:
             pass
 
 async def add_to_voice_queue(guild_id: int, text: str, player_name: str, message=None):
-    """Add voice request to queue and process it"""
+    """Simplified voice queue addition - for backwards compatibility"""
     if guild_id not in voice_queue:
         voice_queue[guild_id] = []
     
-    # Add to queue
     voice_queue[guild_id].append({
         'text': text,
         'message': message,
         'player_name': player_name
     })
     
-    # Show queue status if multiple items
-    queue_size = len(voice_queue[guild_id])
-    if message and queue_size > 1:
-        try:
-            embed = message.embeds[0]
-            for i, field in enumerate(embed.fields):
-                if field.name == "🎤":
-                    embed.set_field_at(i, name="🎤", value=f"*Queued ({queue_size} in line) - {player_name}*", inline=False)
-                    break
-            await message.edit(embed=embed)
-        except:
-            pass
-    
-    # Start processing queue if not already running
-    if queue_size == 1:  # Only start if this is the first item
+    if len(voice_queue[guild_id]) == 1:
         asyncio.create_task(process_voice_queue(guild_id))
 
 async def get_claude_dm_response(user_id: str, player_input: str):
@@ -562,8 +315,181 @@ async def get_claude_dm_response(user_id: str, player_input: str):
         print(f"Claude API error: {e}")
         return "The DM pauses momentarily as otherworldly forces intervene... (Error occurred)"
 
+# Enhanced voice system background processing functions
+async def process_enhanced_action_background(user_id: str, player_input: str, message, 
+                                           character_name: str, char_data: dict, 
+                                           player_name: str, guild_id: int, voice_will_speak: bool):
+    """Process DM response with enhanced voice system"""
+    try:
+        if enhanced_voice and ENHANCED_VOICE_AVAILABLE:
+            # Use enhanced voice manager for parallel processing
+            result = await enhanced_voice.process_player_action(
+                user_id=user_id,
+                action_text=player_input,
+                guild_id=guild_id,
+                voice_clients=voice_clients,
+                tts_enabled=tts_enabled,
+                voice_speed=voice_speed,
+                campaign_context=campaign_context
+            )
+            
+            # Update the message with the actual response
+            embed = message.embeds[0]
+            
+            # Update DM response field with main response
+            for i, field in enumerate(embed.fields):
+                if field.name == "🐉 Donnie the DM":
+                    # Add emotional indicator based on analysis
+                    emotion_indicator = ""
+                    if result['emotion'] == "excited":
+                        emotion_indicator = "😃 "
+                    elif result['emotion'] == "dramatic":
+                        emotion_indicator = "🎭 "
+                    
+                    embed.set_field_at(i, name=f"🐉 Donnie the DM {emotion_indicator}", 
+                                     value=result['response_text'], inline=False)
+                    break
+            
+            await message.edit(embed=embed)
+            
+            # Handle voice if enabled
+            if voice_will_speak and result['tts_audio']:
+                # Update voice status
+                try:
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "🎤":
+                            embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {character_name}*", inline=False)
+                            break
+                    await message.edit(embed=embed)
+                except:
+                    pass
+                
+                # Play main TTS audio
+                await play_tts_audio_direct(guild_id, result['tts_audio'])
+            
+            # Send follow-up if there's additional content
+            if result['follow_up_text']:
+                await send_follow_up_response(
+                    message, result['follow_up_text'], result['follow_up_audio'], 
+                    guild_id, character_name, voice_will_speak
+                )
+                
+            # Update session history
+            full_response = result['response_text']
+            if result['follow_up_text']:
+                full_response += " " + result['follow_up_text']
+                
+            campaign_context["session_history"].append({
+                "player": f"{character_name} ({player_name})",
+                "action": player_input,
+                "dm_response": full_response
+            })
+            
+            if len(campaign_context["session_history"]) > 10:
+                campaign_context["session_history"] = campaign_context["session_history"][-10:]
+        else:
+            # Fall back to original processing
+            await process_dm_response_background_fallback(
+                user_id, player_input, message, character_name, char_data, 
+                player_name, guild_id, voice_will_speak
+            )
+            
+    except Exception as e:
+        print(f"Enhanced voice processing error: {e}")
+        # Fall back to original simple processing
+        await process_dm_response_background_fallback(
+            user_id, player_input, message, character_name, char_data, 
+            player_name, guild_id, voice_will_speak
+        )
+
+async def process_dm_response_background_fallback(user_id: str, player_input: str, message, 
+                                                character_name: str, char_data: dict, 
+                                                player_name: str, guild_id: int, voice_will_speak: bool):
+    """Fallback to original DM response processing"""
+    try:
+        dm_response = await get_claude_dm_response(user_id, player_input)
+        embed = message.embeds[0]
+        for i, field in enumerate(embed.fields):
+            if field.name == "🐉 Donnie the DM" or field.name.startswith("🐉 Donnie the DM"):
+                embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
+                break
+        await message.edit(embed=embed)
+        
+        # Add to voice queue if voice is enabled
+        if voice_will_speak:
+            await add_to_voice_queue(guild_id, dm_response, character_name, message)
+    except Exception as e:
+        print(f"Fallback processing error: {e}")
+
+async def send_follow_up_response(message, follow_up_text: str, follow_up_audio, 
+                                guild_id: int, character_name: str, voice_will_speak: bool):
+    """Send follow-up response as separate message"""
+    # Wait a moment for natural pacing
+    await asyncio.sleep(2)
+    
+    # Create follow-up embed
+    embed = discord.Embed(color=0x2E8B57)
+    embed.add_field(
+        name="🐉 Donnie continues...",
+        value=follow_up_text,
+        inline=False
+    )
+    embed.set_footer(text="💬 Natural continuation")
+    
+    # Send as follow-up
+    try:
+        follow_up_message = await message.channel.send(embed=embed)
+        
+        # Play follow-up audio if available
+        if voice_will_speak and follow_up_audio:
+            await play_tts_audio_direct(guild_id, follow_up_audio)
+            
+    except Exception as e:
+        print(f"Error sending follow-up: {e}")
+
+async def play_tts_audio_direct(guild_id: int, audio_data):
+    """Play TTS audio directly in voice channel"""
+    if guild_id not in voice_clients or not tts_enabled.get(guild_id, False):
+        return
+    
+    voice_client = voice_clients[guild_id]
+    if not voice_client or not voice_client.is_connected():
+        return
+    
+    if not audio_data:
+        return
+    
+    # Save to temporary file
+    with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
+        temp_file.write(audio_data.getvalue())
+        temp_filename = temp_file.name
+    
+    try:
+        # Wait for any current audio to finish
+        while voice_client.is_playing():
+            await asyncio.sleep(0.1)
+        
+        # Play audio in voice channel
+        audio_source = discord.FFmpegPCMAudio(temp_filename)
+        voice_client.play(audio_source)
+        
+        # Wait for audio to finish
+        while voice_client.is_playing():
+            await asyncio.sleep(0.5)
+            
+    except Exception as e:
+        print(f"Audio playback error: {e}")
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_filename)
+        except:
+            pass
+
 @bot.event
 async def on_ready():
+    global enhanced_voice
+    
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
@@ -574,6 +500,29 @@ async def on_ready():
         print("✅ Database initialized successfully")
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
+    
+    # Initialize enhanced voice system if available
+    if ENHANCED_VOICE_AVAILABLE:
+        try:
+            enhanced_voice = EnhancedVoiceManager(claude_client, os.getenv('OPENAI_API_KEY'))
+            
+            # Connect existing functions to the enhanced voice system
+            enhanced_voice.parallel_processor.claude_response_func = get_claude_dm_response
+            
+            async def wrapped_tts_generation(text: str, **voice_params):
+                speed = voice_params.get('speed', 1.25)
+                voice = voice_params.get('voice', 'fable')
+                return await generate_tts_audio(text, voice, speed)
+            
+            enhanced_voice.parallel_processor.tts_generation_func = wrapped_tts_generation
+            print("✅ Enhanced voice system initialized")
+            
+        except Exception as e:
+            print(f"❌ Enhanced voice system failed to initialize: {e}")
+            print("   Falling back to basic voice system")
+            enhanced_voice = None
+    else:
+        print("⚠️  Enhanced voice system not available - using basic voice system")
     
     print('🔄 Syncing slash commands...')
     
@@ -588,7 +537,10 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         print(f'✅ Synced {len(synced)} slash commands')
-        print("🎲 Storm King's Thunder TTS bot with Episode Management ready for adventure!")
+        if enhanced_voice:
+            print("🎲 Storm King's Thunder Enhanced TTS bot ready for adventure!")
+        else:
+            print("🎲 Storm King's Thunder TTS bot with Episode Management ready for adventure!")
     except Exception as e:
         print(f'❌ Failed to sync commands: {e}')
         import traceback
@@ -645,16 +597,24 @@ async def join_voice_channel(interaction: discord.Interaction):
             inline=False
         )
         
+        controls_text = "`/mute_donnie` - Disable TTS\n`/unmute_donnie` - Enable TTS\n`/leave_voice` - Donnie leaves voice\n`/donnie_speed` - Adjust speaking speed"
+        if enhanced_voice:
+            controls_text += "\n\n🆕 **Enhanced Features Active:**\n• Contextual sound effects\n• Emotional voice matching\n• Natural response pacing"
+        
         embed.add_field(
             name="🔧 Controls",
-            value="`/mute_donnie` - Disable TTS\n`/unmute_donnie` - Enable TTS\n`/leave_voice` - Donnie leaves voice\n`/donnie_speed` - Adjust speaking speed",
+            value=controls_text,
             inline=False
         )
         
         await interaction.response.send_message(embed=embed)
         
         # Welcome message in voice
-        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign, you might be thinking, ah a fake robot I can def exploit this guy to cheat my way to the top of the party and eventually bust this campaign wide open, we'll see about that fiends, but anyway yeah just type in forward slash action and tell me what you want to try and do and lets tell this story together shall we!"
+        if enhanced_voice:
+            welcome_text = "Greetings, brave adventurers! I am Donnie, your enhanced Dungeon Master. I'll be narrating this Storm King's Thunder campaign with realistic responses, contextual sound effects, and emotional voice matching. Let's tell this story together!"
+        else:
+            welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign. Type forward slash action and tell me what you want to try and do and lets tell this story together!"
+        
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
         
     except Exception as e:
@@ -777,9 +737,13 @@ async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
         color=0x32CD32
     )
     
+    features_text = "Donnie's voice speed has been adjusted!"
+    if enhanced_voice:
+        features_text = "Donnie uses enhanced features including contextual sound effects, emotional voice matching, and natural DM behaviors!"
+    
     embed.add_field(
-        name="🎤 Realistic DM Experience",
-        value="Donnie now uses thinking sounds, paper shuffling, and natural DM behaviors while preparing responses!",
+        name="🎤 Voice Features",
+        value=features_text,
         inline=False
     )
     
@@ -789,8 +753,6 @@ async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
         await add_to_voice_queue(guild_id, test_message, "Speed Test")
     
     await interaction.response.send_message(embed=embed)
-
-
 
 # ====== CORE GAMEPLAY COMMANDS ======
 
@@ -858,9 +820,13 @@ async def start_adventure(interaction: discord.Interaction):
         inline=False
     )
     
+    voice_text = "🎤 **Voice Narration:** Join a voice channel and use `/join_voice` to have Donnie speak his responses with dramatic flair!"
+    if enhanced_voice:
+        voice_text += "\n🆕 **Enhanced Voice:** Now with contextual sound effects and emotional matching!"
+    
     embed.add_field(
         name="⚔️ Ready for Action",
-        value="Use `/action <what you do>` to interact with the world. The AI DM will respond based on your character's capabilities and the unfolding story.\n\n🎤 **Voice Narration:** Join a voice channel and use `/join_voice` to have Donnie speak his responses with dramatic flair!",
+        value=f"Use `/action <what you do>` to interact with the world. The AI DM will respond based on your character's capabilities and the unfolding story.\n\n{voice_text}",
         inline=False
     )
     
@@ -876,7 +842,7 @@ async def start_adventure(interaction: discord.Interaction):
 @bot.tree.command(name="action", description="Take an action in the Storm King's Thunder campaign")
 @app_commands.describe(what_you_do="Describe what your character does or says")
 async def take_action(interaction: discord.Interaction, what_you_do: str):
-    """Process player action and get DM response with TTS - INSTANT response"""
+    """Process player action and get DM response with enhanced voice system - INSTANT response"""
     user_id = str(interaction.user.id)
     player_name = interaction.user.display_name
     
@@ -929,7 +895,10 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
                        tts_enabled.get(guild_id, False))
     
     if voice_will_speak:
-        embed.add_field(name="🎤", value="*Donnie prepares his response...*", inline=False)
+        status_text = "*Donnie prepares his response...*"
+        if enhanced_voice:
+            status_text = "*Donnie prepares enhanced response with sound effects...*"
+        embed.add_field(name="🎤", value=status_text, inline=False)
     elif guild_id in voice_clients and voice_clients[guild_id].is_connected():
         embed.add_field(name="🔇", value="*Donnie is muted*", inline=False)
     
@@ -937,67 +906,19 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
     episode_info = f"Level {char_data['level']} • {char_data['background']} • Player: {player_name}"
     if campaign_context.get("episode_active", False):
         episode_info += f" • Episode {campaign_context.get('current_episode', 0)}"
+    if enhanced_voice:
+        episode_info += " • Enhanced Voice Active"
     embed.set_footer(text=episode_info)
     
     # Send the response IMMEDIATELY
     await interaction.response.send_message(embed=embed)
     message = await interaction.original_response()
     
-    # Play thinking sound immediately if voice is enabled (fills the waiting gap)
-    if voice_will_speak:
-        asyncio.create_task(play_thinking_sound(guild_id, character_name))
-    
-    # Process Claude API call in background
-    asyncio.create_task(process_dm_response_background(
+    # Process with enhanced or fallback system in background
+    asyncio.create_task(process_enhanced_action_background(
         user_id, what_you_do, message, character_name, char_data, 
         player_name, guild_id, voice_will_speak
     ))
-
-async def process_dm_response_background(user_id: str, player_input: str, message, 
-                                       character_name: str, char_data: dict, 
-                                       player_name: str, guild_id: int, voice_will_speak: bool):
-    """Process DM response with automatic continuation support"""
-    try:
-        # Get Claude DM response
-        dm_response = await get_claude_dm_response(user_id, player_input)
-        
-        # Get TTS version and continuation
-        tts_text, continuation_text = create_tts_version_with_continuation(dm_response)
-        
-        # Update the message with the actual response (show full response in text)
-        embed = message.embeds[0]
-        
-        # Update DM response field with FULL response
-        for i, field in enumerate(embed.fields):
-            if field.name == "🐉 Donnie the DM":
-                embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
-                break
-        
-        await message.edit(embed=embed)
-        
-        # Add to voice queue if voice is enabled (use TTS-optimized version for speed)
-        if voice_will_speak:
-            await add_to_voice_queue(guild_id, tts_text, character_name, message)
-        
-        # Send continuation if needed
-        if continuation_text:
-            await send_continuation_if_needed(
-                message, dm_response, tts_text, continuation_text, guild_id, character_name
-            )
-            
-    except Exception as e:
-        print(f"Background processing error: {e}")
-        # Update with error message
-        try:
-            embed = message.embeds[0]
-            for i, field in enumerate(embed.fields):
-                if field.name == "🐉 Donnie the DM":
-                    embed.set_field_at(i, name="🐉 Donnie the DM", 
-                                     value="*The DM pauses as otherworldly forces intervene...*", inline=False)
-                    break
-            await message.edit(embed=embed)
-        except:
-            pass
 
 @bot.tree.command(name="roll", description="Roll dice for your Storm King's Thunder adventure")
 @app_commands.describe(dice="Dice notation like 1d20, 3d6, 2d8+3")
@@ -1119,10 +1040,12 @@ async def show_status(interaction: discord.Interaction):
         if tts_enabled.get(guild_id, False):
             speed = voice_speed.get(guild_id, 1.25)
             queue_size = len(voice_queue.get(guild_id, []))
+            voice_status = f"🎤 Connected ({speed}x speed"
             if queue_size > 0:
-                voice_status = f"🎤 Connected ({speed}x speed, {queue_size} queued)"
-            else:
-                voice_status = f"🎤 Connected ({speed}x speed)"
+                voice_status += f", {queue_size} queued"
+            voice_status += ")"
+            if enhanced_voice:
+                voice_status += " 🆕 Enhanced"
         else:
             voice_status = "🔇 Muted"
     else:
@@ -1316,9 +1239,13 @@ async def show_help(interaction: discord.Interaction):
         inline=False
     )
     
+    voice_features_text = "`/join_voice` - Donnie joins voice with fast, optimized narration\n`/leave_voice` - Donnie leaves voice channel\n`/mute_donnie` - Disable TTS narration\n`/unmute_donnie` - Enable TTS narration\n`/donnie_speed <1.0-2.0>` - Adjust speaking speed"
+    if enhanced_voice:
+        voice_features_text += "\n\n🆕 **Enhanced Features Active:**\n• Contextual sound effects\n• Emotional voice matching\n• Natural response pacing\n• Parallel processing"
+    
     embed.add_field(
         name="🎤 Voice Features (OPTIMIZED!)",
-        value="`/join_voice` - Donnie joins voice with fast, optimized narration\n`/leave_voice` - Donnie leaves voice channel\n`/mute_donnie` - Disable TTS narration\n`/unmute_donnie` - Enable TTS narration\n`/donnie_speed <1.0-2.0>` - Adjust speaking speed",
+        value=voice_features_text,
         inline=False
     )
     
@@ -1358,14 +1285,22 @@ async def show_help(interaction: discord.Interaction):
         inline=False
     )
     
+    highlights_text = "• **Species instead of Race**: Updated 2024 terminology\n• **Individual Ability Scores**: Proper validation and modifiers\n• **2024 Class Features**: Updated Player's Handbook features\n• **Modern Spellcasting**: 2024 spell slot progression\n• **Complete Skill System**: All 18 skills with proficiency tracking\n• **Combat Mechanics**: AC, HP, speed, hit dice tracking\n• **Voice Integration**: All 2024 features work with Donnie's voice"
+    if enhanced_voice:
+        highlights_text += "\n• **🆕 Enhanced Voice**: Contextual sound effects and emotional matching\n• **🆕 Smart Responses**: Natural pacing and parallel processing"
+    
     embed.add_field(
         name="🌟 2024 D&D Features Highlights",
-        value="• **Species instead of Race**: Updated 2024 terminology\n• **Individual Ability Scores**: Proper validation and modifiers\n• **2024 Class Features**: Updated Player's Handbook features\n• **Modern Spellcasting**: 2024 spell slot progression\n• **Complete Skill System**: All 18 skills with proficiency tracking\n• **Combat Mechanics**: AC, HP, speed, hit dice tracking\n• **Voice Integration**: All 2024 features work with Donnie's voice",
+        value=highlights_text,
         inline=False
     )
     
-    embed.set_footer(text="Donnie the DM awaits to guide your D&D 5e 2024 adventure!")
-    await interaction.response.send_message(embed=embed) 
+    footer_text = "Donnie the DM awaits to guide your D&D 5e 2024 adventure!"
+    if enhanced_voice:
+        footer_text += " 🆕 Enhanced Voice System Active!"
+    embed.set_footer(text=footer_text)
+    
+    await interaction.response.send_message(embed=embed)
 
 # Initialize Episode Management and Character Progression
 episode_commands = EpisodeCommands(
