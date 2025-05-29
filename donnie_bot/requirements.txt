@@ -9,3 +9,4 @@ pymupdf
 pillow
 pydub 
 pathlib2
+aiohttp>=3.8.0
