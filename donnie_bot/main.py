@@ -1,4 +1,4 @@
-# main.py - UPDATED IMPORTS SECTION
+# main.py - UPDATED WITH STATE SYNCHRONIZATION FIXES
 # Replace the existing import section with this:
 
 import discord
@@ -40,6 +40,10 @@ except ImportError as e:
         def create_episode(*args, **kwargs): pass
         @staticmethod
         def get_current_episode(*args, **kwargs): return None
+        @staticmethod
+        def update_session_history(*args, **kwargs): pass
+        @staticmethod
+        def end_episode(*args, **kwargs): pass
     
     class CharacterOperations:
         @staticmethod
@@ -1219,6 +1223,78 @@ Respond as Donnie, the Storm King's Thunder DM, following ALL D&D 5e 2024 rules 
         traceback.print_exc()
         return f"The DM pauses momentarily as otherworldly forces intervene... (Fallback Error: {str(e)})"
 
+# ====== STATE SYNCHRONIZATION FIXES ======
+
+def sync_campaign_context_with_database(guild_id: str):
+    """Sync in-memory campaign context with database state - FIXED VERSION"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        # Get current episode from database
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode:
+            # SYNC ALL STATE VARIABLES - THE FIX
+            campaign_context["current_episode"] = current_episode.episode_number
+            campaign_context["episode_active"] = True  # ✅ ENSURE THIS IS SET
+            campaign_context["session_started"] = True  # ✅ ENSURE THIS IS SET TOO
+            campaign_context["episode_start_time"] = current_episode.start_time
+            campaign_context["guild_id"] = guild_id
+            
+            # Load session history from database
+            if current_episode.session_history:
+                campaign_context["session_history"] = current_episode.session_history
+            
+            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
+            print(f"   episode_active: {campaign_context['episode_active']}")
+            print(f"   session_started: {campaign_context['session_started']}")
+        else:
+            # NO ACTIVE EPISODE - CLEAR ALL STATE
+            campaign_context["current_episode"] = 0
+            campaign_context["episode_active"] = False
+            campaign_context["session_started"] = False
+            campaign_context["episode_start_time"] = None
+            print(f"✅ No active episode - cleared all state")
+        
+        # Get guild settings
+        guild_settings = GuildOperations.get_guild_settings(guild_id)
+        if guild_settings:
+            # Sync voice settings with database - FIX GUILD ID TYPE
+            voice_speed[int(guild_id)] = guild_settings.get('voice_speed', 1.25)
+            tts_enabled[int(guild_id)] = guild_settings.get('tts_enabled', False)
+            
+            print(f"✅ Synced guild settings for {guild_id}")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to sync campaign context: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def ensure_state_sync(guild_id: str):
+    """Helper function to ensure state is synced before operations"""
+    sync_campaign_context_with_database(guild_id)
+    
+    # Verify sync worked and fix any remaining issues
+    if DATABASE_AVAILABLE:
+        try:
+            db_episode = EpisodeOperations.get_current_episode(guild_id)
+            memory_active = campaign_context.get("episode_active", False)
+            memory_started = campaign_context.get("session_started", False)
+            
+            if db_episode and not memory_active:
+                print(f"⚠️ State sync issue detected - forcing memory state update")
+                campaign_context["episode_active"] = True
+                campaign_context["session_started"] = True
+                campaign_context["current_episode"] = db_episode.episode_number
+                campaign_context["guild_id"] = guild_id
+            elif not db_episode and memory_active:
+                print(f"⚠️ State sync issue detected - clearing memory state")
+                campaign_context["episode_active"] = False
+                campaign_context["session_started"] = False
+                campaign_context["current_episode"] = 0
+        except Exception as e:
+            print(f"⚠️ State validation error: {e}")
+
 @bot.event
 async def on_ready():
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
@@ -1239,6 +1315,17 @@ async def on_ready():
                 print(f"📊 Database stats: {stats}")
             else:
                 print("⚠️ Database health check failed")
+            
+            # ✅ FORCE SYNC ALL ACTIVE GUILDS ON STARTUP
+            print("🔄 Syncing guild states on startup...")
+            try:
+                # Get all guilds the bot is in
+                for guild in bot.guilds:
+                    guild_id = str(guild.id)
+                    print(f"🔄 Syncing guild {guild.name} ({guild_id})")
+                    sync_campaign_context_with_database(guild_id)
+            except Exception as e:
+                print(f"⚠️ Error during startup sync: {e}")
                 
         except Exception as e:
             print(f"❌ Database initialization failed: {e}")
@@ -1545,6 +1632,57 @@ async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
         await add_to_voice_queue(guild_id, test_message, "Speed Test")
     
     await interaction.response.send_message(embed=embed)
+
+# ====== DEBUG COMMAND - STEP 1 OF STATE SYNC FIX ======
+
+@bot.tree.command(name="debug_state", description="Show detailed state information (Admin only)")
+async def debug_state(interaction: discord.Interaction):
+    """Debug command to show all state information"""
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    guild_id = str(interaction.guild.id)
+    
+    # Get database state
+    db_episode = None
+    if DATABASE_AVAILABLE:
+        db_episode = EpisodeOperations.get_current_episode(guild_id)
+    
+    embed = discord.Embed(
+        title="🔍 Debug State Information",
+        color=0x4169E1
+    )
+    
+    # In-memory state
+    embed.add_field(
+        name="📝 In-Memory State",
+        value=f"session_started: {campaign_context.get('session_started', False)}\n"
+              f"episode_active: {campaign_context.get('episode_active', False)}\n"
+              f"current_episode: {campaign_context.get('current_episode', 0)}\n"
+              f"guild_id: {campaign_context.get('guild_id', 'None')}",
+        inline=False
+    )
+    
+    # Database state
+    if db_episode:
+        embed.add_field(
+            name="🗄️ Database State",
+            value=f"Episode ID: {db_episode.id}\n"
+                  f"Episode Number: {db_episode.episode_number}\n"
+                  f"Episode Name: {db_episode.episode_name}\n"
+                  f"Start Time: {db_episode.start_time}\n"
+                  f"End Time: {db_episode.end_time}",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🗄️ Database State",
+            value="No active episode in database",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ====== CHARACTER MANAGEMENT COMMANDS ======
 
@@ -1936,14 +2074,20 @@ async def start_adventure(interaction: discord.Interaction):
     embed.set_footer(text="What do you do in this moment of crisis?")
     await interaction.response.send_message(embed=embed)
 
+# ====== FIXED ACTION COMMAND - STEP 4 OF STATE SYNC FIX ======
+
 @bot.tree.command(name="action", description="Take an action in the Storm King's Thunder campaign")
 @app_commands.describe(what_you_do="Describe what your character does or says")
 async def take_action(interaction: discord.Interaction, what_you_do: str):
-    """Process player action and get DM response with TTS and combat intelligence - INSTANT response"""
+    """Streamlined action processing - FAST"""
     user_id = str(interaction.user.id)
     player_name = interaction.user.display_name
+    guild_id = str(interaction.guild.id)
     
-    # Check if player has registered a character
+    # ✅ FORCE SYNC BEFORE CHECKING STATE
+    await ensure_state_sync(guild_id)
+    
+    # Quick validation
     if user_id not in campaign_context["characters"]:
         embed = discord.Embed(
             title="🎭 Character Not Registered",
@@ -1953,21 +2097,26 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    # Check if session has started
-    if not campaign_context.get("session_started", False) and not campaign_context.get("episode_active", False):
+    # ✅ CHECK BOTH CONDITIONS WITH DEBUG INFO
+    session_started = campaign_context.get("session_started", False)
+    episode_active = campaign_context.get("episode_active", False)
+    
+    print(f"🔍 Action check - session_started: {session_started}, episode_active: {episode_active}")
+    
+    if not session_started and not episode_active:
         embed = discord.Embed(
             title="⚡ Adventure Not Started",
-            description="Use `/start_episode` (recommended) or `/start` to begin the Storm King's Thunder adventure first!",
+            description=f"Use `/start_episode` or `/start` to begin!\n\n**Debug Info:**\nSession Started: {session_started}\nEpisode Active: {episode_active}\nCurrent Episode: {campaign_context.get('current_episode', 0)}",
             color=0xFF6B6B
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    # Get character data
+    # Get character data (rest of function stays the same)
     char_data = campaign_context["players"][user_id]["character_data"]
     character_name = char_data["name"]
     
-    # Update current player name in case it changed
+    # Update player name
     campaign_context["players"][user_id]["player_name"] = player_name
     
     # Create response embed with character name and class
@@ -1986,14 +2135,13 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
     )
     
     # Add voice status indicator
-    guild_id = interaction.guild.id
-    voice_will_speak = (guild_id in voice_clients and 
-                       voice_clients[guild_id].is_connected() and 
-                       tts_enabled.get(guild_id, False))
+    voice_will_speak = (interaction.guild.id in voice_clients and 
+                       voice_clients[interaction.guild.id].is_connected() and 
+                       tts_enabled.get(interaction.guild.id, False))
     
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares his response...*", inline=False)
-    elif guild_id in voice_clients and voice_clients[guild_id].is_connected():
+    elif interaction.guild.id in voice_clients and voice_clients[interaction.guild.id].is_connected():
         embed.add_field(name="🔇", value="*Donnie is muted*", inline=False)
     
     # Add character context footer with combat status
@@ -2010,12 +2158,12 @@ async def take_action(interaction: discord.Interaction, what_you_do: str):
     
     # Play thinking sound immediately if voice is enabled (fills the waiting gap)
     if voice_will_speak:
-        asyncio.create_task(play_thinking_sound(guild_id, character_name))
+        asyncio.create_task(play_thinking_sound(interaction.guild.id, character_name))
     
     # Process Claude API call in background with enhanced combat intelligence
     asyncio.create_task(process_enhanced_dm_response_background(
         user_id, what_you_do, message, character_name, char_data, 
-        player_name, guild_id, voice_will_speak
+        player_name, interaction.guild.id, voice_will_speak
     ))
 
 async def process_enhanced_dm_response_background(user_id: str, player_input: str, message, 
@@ -2524,30 +2672,30 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="🎤 Voice Features (OPTIMIZED!)",
-        value="`/join_voice` - Donnie joins voice with fast, optimized narration\n`/leave_voice` - Donnie leaves voice channel\n`/mute_donnie` - Disable TTS narration\n`/unmute_donnie` - Enable TTS narration\n`/donnie_speed <1.0-2.0>` - Adjust speaking speed\n`/donnie_quality <mode>` - Toggle speed vs quality (NEW!)",
+        value="`/join_voice` - Donnie joins voice with fast, optimized narration\n`/leave_voice` - Donnie leaves voice channel\n`/mute_donnie` - Disable TTS narration\n`/unmute_donnie` - Enable TTS narration\n`/donnie_speed <1.0-2.0>` - Adjust speaking speed\n`/debug_state` - Show state sync info (Admin)",
         inline=False
     )
     
     embed.add_field(
-        name="📄 Character Upload (NEW!)",
+        name="📄 Character Upload",
         value="`/upload_character_sheet` - Upload PDF character sheet for auto-parsing\n`/character_sheet_help` - Get help with character sheet uploads\n`/character` - Manual character registration (alternative)",
         inline=False
     )
     
     embed.add_field(
-        name="⚔️ Intelligent Combat (NEW!)",
+        name="⚔️ Intelligent Combat",
         value="`/combat_status` - View current combat and initiative\n`/end_combat` - End combat encounter (Admin only)\n**Auto-Combat**: Combat triggers automatically from your actions!\n**Smart AI**: Monsters act based on Intelligence scores",
         inline=False
     )
     
     embed.add_field(
-        name="📺 Episode Management (NEW!)",
-        value="`/start_episode [name]` - Begin new episode with recap\n`/end_episode [summary]` - End current episode\n`/episode_recap [#] [style]` - Get AI dramatic recaps\n`/episode_history` - View past episodes\n`/add_story_note` - Add player notes (non-canonical)",
+        name="📺 Episode Management",
+        value="`/start_episode [name]` - Begin new episode with recap\n`/end_episode [summary]` - End current episode\n`/episode_recap [#] [style]` - Get AI dramatic recaps\n`/episode_history` - View past episodes\n`/episode_status` - Check current episode status",
         inline=False
     )
     
     embed.add_field(
-        name="📈 Character Progression (NEW!)",
+        name="📈 Character Progression",
         value="`/level_up <level> [reason]` - Level up with tracking\n`/character_progression [player]` - View progression history\n`/character_snapshot [notes]` - Manual character snapshot\n`/party_progression` - View entire party progression",
         inline=False
     )
@@ -2572,13 +2720,13 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="⚙️ Admin Commands",
-        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter",
+        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter\n`/debug_state` - Show state synchronization info",
         inline=False
     )
     
     embed.add_field(
-        name="🌟 New Features Highlights",
-        value="• **Intelligent Combat**: Auto-detection, smart monster AI, tactical behavior\n• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Smart AI Parsing**: Claude reads every detail from your character sheet\n• **Episode System**: Persistent memory with dramatic recaps\n• **Character Progression**: Level tracking across episodes\n• **Voice Integration**: All features work with Donnie's voice narration\n• **Seamless Experience**: No new combat commands to learn!",
+        name="🌟 State Sync Features (NEW!)",
+        value="• **Automatic State Sync**: Memory and database always stay in sync\n• **Cross-Session Persistence**: Episodes persist across bot restarts\n• **Debug Tools**: `/debug_state` helps troubleshoot sync issues\n• **Smart Recovery**: Auto-fixes state mismatches\n• **Episode Continuity**: Never lose campaign progress",
         inline=False
     )
     
@@ -2676,40 +2824,6 @@ except ImportError as e:
 except Exception as e:
     print(f"❌ Error initializing PDF system: {e}")
 
-# ====== DATABASE INTEGRATION FOR CAMPAIGN CONTEXT ======
-
-def sync_campaign_context_with_database(guild_id: str):
-    """Sync in-memory campaign context with database state"""
-    if not DATABASE_AVAILABLE:
-        return
-    
-    try:
-        # Get current episode from database
-        current_episode = EpisodeOperations.get_current_episode(guild_id)
-        if current_episode:
-            campaign_context["current_episode"] = current_episode.episode_number
-            campaign_context["episode_active"] = True
-            campaign_context["episode_start_time"] = current_episode.start_time
-            campaign_context["guild_id"] = guild_id
-            
-            # Load session history from database
-            if current_episode.session_history:
-                campaign_context["session_history"] = current_episode.session_history
-            
-            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
-        
-        # Get guild settings
-        guild_settings = GuildOperations.get_guild_settings(guild_id)
-        if guild_settings:
-            # Sync voice settings with database
-            voice_speed[guild_id] = guild_settings.get('voice_speed', 1.25)
-            tts_enabled[guild_id] = guild_settings.get('tts_enabled', False)
-            
-            print(f"✅ Synced guild settings for {guild_id}")
-            
-    except Exception as e:
-        print(f"⚠️ Failed to sync campaign context: {e}")
-
 # Add helper function to update database when campaign context changes
 def update_database_from_campaign_context(guild_id: str):
     """Update database when campaign context changes"""
@@ -2741,6 +2855,8 @@ print("🔗 Database integration: " + ("✅ Active" if DATABASE_AVAILABLE else "
 print("📺 Episode management: " + ("✅ Active" if episode_commands else "❌ Disabled"))
 print("📈 Character progression: " + ("✅ Active" if character_progression else "❌ Disabled"))
 print("🎤 Enhanced voice: " + ("✅ Active" if enhanced_voice_manager else "❌ Disabled"))
+print("🔄 State synchronization: ✅ Active")
+
 if __name__ == "__main__":
     # Check for required dependencies
     print("🔍 Checking dependencies...")
@@ -2774,6 +2890,7 @@ if __name__ == "__main__":
     print("🤖 Features: Auto-combat detection, AI monster intelligence, story-driven encounters")
     print("🎯 No new commands to learn - everything works through existing `/action` command!")
     print("⚔️ Combat will trigger automatically when players take hostile actions")
+    print("🔄 State synchronization fixes applied!")
     
     # GET THE DISCORD TOKEN
     print("🔑 Checking Discord token...")

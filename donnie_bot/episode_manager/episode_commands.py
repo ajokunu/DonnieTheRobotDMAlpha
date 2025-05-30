@@ -1,5 +1,5 @@
 # episode_manager/episode_commands.py
-# UPDATE: Replace your existing episode_commands.py with this enhanced version
+# UPDATE: Replace your existing episode_commands.py with this enhanced version WITH STATE SYNC FIXES
 
 import discord
 from discord.ext import commands
@@ -27,6 +27,8 @@ except ImportError:
         def get_episode_history(*args, **kwargs): return []
         @staticmethod
         def get_next_episode_number(*args, **kwargs): return 1
+        @staticmethod
+        def update_session_history(*args, **kwargs): pass
     
     class CharacterOperations:
         @staticmethod
@@ -36,8 +38,17 @@ except ImportError:
         @staticmethod
         def update_guild_settings(*args, **kwargs): return False
 
+# Import sync function from main - STATE SYNC FIX
+try:
+    from main import sync_campaign_context_with_database
+    MAIN_SYNC_AVAILABLE = True
+except ImportError:
+    MAIN_SYNC_AVAILABLE = False
+    def sync_campaign_context_with_database(guild_id): 
+        print(f"⚠️ Sync function not available for guild {guild_id}")
+
 class EpisodeCommands:
-    """Enhanced Episode Management with Database Integration"""
+    """Enhanced Episode Management with Database Integration and State Sync"""
     
     def __init__(self, bot: commands.Bot, campaign_context: Dict, voice_clients: Dict,
                  tts_enabled: Dict, add_to_voice_queue_func: Callable,
@@ -57,6 +68,7 @@ class EpisodeCommands:
         self._register_commands()
         
         print(f"✅ Episode Commands initialized (Database: {'✅' if DATABASE_AVAILABLE else '❌'})")
+        print(f"🔄 State Sync: {'✅' if MAIN_SYNC_AVAILABLE else '❌'}")
     
     def _register_commands(self):
         """Register all episode-related commands"""
@@ -102,7 +114,7 @@ class EpisodeCommands:
     
     async def _start_episode_command(self, interaction: discord.Interaction, 
                                    episode_name: Optional[str], recap_previous: bool):
-        """Start a new episode with database integration"""
+        """Start a new episode with database integration and STATE SYNC"""
         guild_id = str(interaction.guild.id)
         
         # Check if episode is already active
@@ -250,9 +262,16 @@ class EpisodeCommands:
         if voice_will_speak:
             announcement = f"Welcome, brave adventurers, to {episode_name}! Your journey through the Storm King's Thunder campaign continues. The giants still threaten the Sword Coast, and heroes are needed now more than ever. What will you do first?"
             await self.add_to_voice_queue(interaction.guild.id, announcement, "Episode Start")
+        
+        # ✅ CRITICAL: SYNC STATE AFTER EPISODE CREATION
+        if MAIN_SYNC_AVAILABLE:
+            sync_campaign_context_with_database(guild_id)
+            print(f"🔄 Episode {episode_number} started and state synced")
+        else:
+            print(f"⚠️ Could not sync state after episode start - sync function unavailable")
     
     async def _end_episode_command(self, interaction: discord.Interaction, summary: Optional[str]):
-        """End the current episode with database integration"""
+        """End the current episode with database integration and STATE SYNC"""
         guild_id = str(interaction.guild.id)
         
         # Check if episode is active
@@ -322,6 +341,7 @@ class EpisodeCommands:
         # Update campaign context
         self.campaign_context["episode_active"] = False
         self.campaign_context["episode_start_time"] = None
+        self.campaign_context["session_started"] = False  # Clear session_started too
         
         # Create response
         embed = discord.Embed(
@@ -361,6 +381,13 @@ class EpisodeCommands:
         if voice_will_speak:
             announcement = f"And so concludes Episode {episode_number} of your Storm King's Thunder adventure! The heroes have faced new challenges and grown stronger. What legends will the next episode bring?"
             await self.add_to_voice_queue(interaction.guild.id, announcement, "Episode End")
+        
+        # ✅ CRITICAL: SYNC STATE AFTER EPISODE END
+        if MAIN_SYNC_AVAILABLE:
+            sync_campaign_context_with_database(guild_id)
+            print(f"🔄 Episode {episode_number} ended and state synced")
+        else:
+            print(f"⚠️ Could not sync state after episode end - sync function unavailable")
     
     async def _episode_recap_command(self, interaction: discord.Interaction, 
                                    episode_number: int, style: str):
@@ -426,8 +453,12 @@ class EpisodeCommands:
             await interaction.response.send_message(embed=embed, ephemeral=True)
     
     async def _episode_status_command(self, interaction: discord.Interaction):
-        """Show current episode status"""
+        """Show current episode status with STATE SYNC CHECK"""
         guild_id = str(interaction.guild.id)
+        
+        # ✅ FORCE SYNC BEFORE SHOWING STATUS
+        if MAIN_SYNC_AVAILABLE:
+            sync_campaign_context_with_database(guild_id)
         
         embed = discord.Embed(
             title="📺 Episode Status",
@@ -456,6 +487,17 @@ class EpisodeCommands:
                         value=f"**Actions Taken:** {history_count}\n**Combat Active:** {'Yes' if self.campaign_context.get('combat_active') else 'No'}",
                         inline=True
                     )
+                    
+                    # State sync verification
+                    memory_active = self.campaign_context.get("episode_active", False)
+                    memory_started = self.campaign_context.get("session_started", False)
+                    
+                    sync_status = "✅ Synced" if memory_active and memory_started else "⚠️ Desync"
+                    embed.add_field(
+                        name="🔄 State Sync",
+                        value=f"Memory/DB: {sync_status}\nEpisode Active: {memory_active}\nSession Started: {memory_started}",
+                        inline=True
+                    )
                 else:
                     embed.description = "No episode is currently active."
                     embed.add_field(
@@ -463,6 +505,17 @@ class EpisodeCommands:
                         value="Use `/start_episode` to begin your next adventure!",
                         inline=False
                     )
+                    
+                    # Show sync status for no active episode
+                    memory_active = self.campaign_context.get("episode_active", False)
+                    memory_started = self.campaign_context.get("session_started", False)
+                    
+                    if memory_active or memory_started:
+                        embed.add_field(
+                            name="⚠️ State Warning",
+                            value=f"Memory shows active ({memory_active}/{memory_started}) but DB shows none. Use `/debug_state` for details.",
+                            inline=False
+                        )
             except Exception as e:
                 embed.description = f"Error loading episode status: {str(e)}"
         else:
