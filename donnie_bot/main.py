@@ -35,11 +35,15 @@ intents.voice_states = True  # Required for voice functionality
 
 bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
+# Enhanced Voice System Integration
+enhanced_voice_manager = None
+
 # Voice client storage
 voice_clients = {}
 tts_enabled = {}  # Track TTS status per guild
 voice_speed = {}  # Track speech speed per guild (default 1.25)
 voice_queue = {}  # Voice queue per guild to prevent overlapping
+voice_quality = {}  # Guild ID -> "speed" or "quality"
 
 # Combat state tracking (integrates with existing campaign_context)
 combat_state = {
@@ -55,7 +59,7 @@ combat_state = {
 # DM Thinking Sounds - ACTUAL sounds, not descriptions
 DM_THINKING_SOUNDS = [
     "...Hhhhhmm...",
-    "...Aaahhh okay let's try",  # actual throat clearing sound
+    "...Aaahhh okay let's try",
     "...Uhhhh...huh yes okay...",
     "...Let meeee see...",
     "...Mmm-hmm...",
@@ -456,15 +460,18 @@ def roll_damage_from_string(damage_str: str) -> int:
     except:
         return 1
 
-async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20) -> Optional[io.BytesIO]:
-    """Generate TTS audio using OpenAI's Fable voice - optimized for speed"""
+async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
+    """Generate TTS audio using OpenAI's API - optimized for speed"""
     try:
         # Clean text for TTS (remove excessive formatting)
         clean_text = text.replace("**", "").replace("*", "").replace("_", "")
         
+        # Enhanced TTS optimization
+        clean_text = optimize_text_for_tts(clean_text)
+        
         # Use OpenAI TTS API with optimized settings for speed
         async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10),
+            timeout=aiohttp.ClientTimeout(total=8),  # Reduced timeout
             connector=aiohttp.TCPConnector(limit=10)
         ) as session:
             headers = {
@@ -474,10 +481,10 @@ async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.2
             
             # OpenAI TTS payload optimized for speed
             payload = {
-                "model": "tts-1-hd",  # voice quality model
+                "model": model,  # Default to tts-1 for speed
                 "input": clean_text,
                 "voice": voice,  # "fable" voice - expressive and dramatic for storytelling
-                "response_format": "opus",
+                "response_format": "mp3",  # Changed from opus to mp3 for faster processing
                 "speed": speed  # Adjustable speed for optimal gameplay
             }
             
@@ -498,6 +505,41 @@ async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.2
         print(f"TTS generation error: {e}")
         return None
 
+def optimize_text_for_tts(text: str) -> str:
+    """Optimize text specifically for faster, clearer TTS delivery"""
+    import re
+    
+    # Remove excessive formatting
+    clean_text = text.replace("**", "").replace("*", "").replace("_", "")
+    
+    # Spell out dice notation for better pronunciation
+    clean_text = re.sub(r'\b(\d+)d(\d+)\b', r'\1 dee \2', clean_text)
+    clean_text = re.sub(r'\bDC\s*(\d+)\b', r'difficulty class \1', clean_text)
+    clean_text = re.sub(r'\bAC\s*(\d+)\b', r'armor class \1', clean_text)
+    clean_text = re.sub(r'\bHP\s*(\d+)\b', r'hit points \1', clean_text)
+    
+    # Simplify complex words for faster speech
+    replacements = {
+        "immediately": "now",
+        "suddenly": "",
+        "extremely": "very",
+        "tremendous": "huge",
+        "magnificent": "great",
+        "extraordinary": "amazing"
+    }
+    
+    for old, new in replacements.items():
+        clean_text = clean_text.replace(old, new)
+    
+    # Remove redundant phrases
+    clean_text = re.sub(r'\b(very|quite|rather|extremely|incredibly|tremendously)\s+', '', clean_text)
+    clean_text = re.sub(r'\b(suddenly|immediately|quickly|slowly)\s+', '', clean_text)
+    
+    # Clean up extra spaces
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+    
+    return clean_text
+
 def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
     """
     Create TTS version and return both the spoken version and any continuation needed
@@ -505,28 +547,21 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
     """
     import re
     
-    original_text = full_text
-    tts_text = full_text
-    
-    # Light cleanup - preserve the core message
-    tts_text = re.sub(r'\b(very|quite|rather|extremely|incredibly|tremendously)\s+', '', tts_text)
-    tts_text = re.sub(r'\b(suddenly|immediately|quickly|slowly)\s+', '', tts_text)
-    tts_text = re.sub(r',\s+and\s+', ' and ', tts_text)
-    tts_text = re.sub(r'\([^)]*\)', '', tts_text)
-    tts_text = re.sub(r'\s+', ' ', tts_text).strip()
+    # Apply enhanced text optimization
+    optimized_text = optimize_text_for_tts(full_text)
     
     continuation_text = ""
     
-    # Check if we need to truncate for TTS speed - be more conservative
-    if len(tts_text) > 400:  # Raised threshold to avoid unnecessary splits
-        sentences = tts_text.split('. ')
+    # Check if we need to truncate for TTS speed - be more aggressive for speed
+    if len(optimized_text) > 350:  # Reduced threshold for faster response
+        sentences = optimized_text.split('. ')
         
         # Look for STRONG natural stopping points only
         natural_break_index = None
         for i, sentence in enumerate(sentences):
             # Only split at very clear breaks - questions or direct requests
             if any(indicator in sentence.lower() for indicator in [
-                'what do you do?', 'roll a', 'make a', 'roll for', '?'
+                'what do you do?', 'roll a', 'make a', 'roll for', '?', 'initiative'
             ]) and i > 0:  # Don't split at the very first sentence
                 natural_break_index = i + 1
                 break
@@ -536,19 +571,19 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
             spoken_sentences = sentences[:natural_break_index]
             remaining_sentences = sentences[natural_break_index:]
             
-            tts_text = '. '.join(spoken_sentences) + '.'
+            optimized_text = '. '.join(spoken_sentences) + '.'
             if remaining_sentences:
                 continuation_text = '. '.join(remaining_sentences) + '.'
         
-        # Only split at sentence boundaries if really long (500+ chars)
-        elif len(tts_text) > 500 and len(sentences) > 3:
-            # Take first half of sentences, but ensure we don't split mid-thought
-            split_point = min(len(sentences) // 2, 3)  # Max 3 sentences in first part
+        # More aggressive splitting for speed - if still too long
+        elif len(optimized_text) > 400 and len(sentences) > 2:
+            # Take first 2 sentences maximum for speed
+            split_point = min(len(sentences) // 2, 2)  # Max 2 sentences in first part
             
             spoken_sentences = sentences[:split_point] 
             remaining_sentences = sentences[split_point:]
             
-            tts_text = '. '.join(spoken_sentences) + '.'
+            optimized_text = '. '.join(spoken_sentences) + '.'
             if remaining_sentences:
                 continuation_text = '. '.join(remaining_sentences) + '.'
     
@@ -561,9 +596,9 @@ def create_tts_version_with_continuation(full_text: str) -> tuple[str, str]:
             continuation_text = continuation_text[0].upper() + continuation_text[1:]
         
         # Remove any duplicate content between tts_text and continuation_text
-        continuation_text = remove_duplicate_content(tts_text, continuation_text)
+        continuation_text = remove_duplicate_content(optimized_text, continuation_text)
     
-    return tts_text, continuation_text
+    return optimized_text, continuation_text
 
 def remove_duplicate_content(first_part: str, second_part: str) -> str:
     """Remove duplicate sentences between first and second part"""
@@ -661,17 +696,17 @@ async def speak_thinking_sound_directly(guild_id: int, text: str):
     if not voice_client or not voice_client.is_connected():
         return
     
-    # Use faster speed for thinking sounds to keep them brief
-    speed = voice_speed.get(guild_id, 1.25) * 1.2  # 20% faster for thinking sounds
+    # Use faster speed and model for thinking sounds to keep them brief
+    speed = voice_speed.get(guild_id, 1.25) * 1.3  # 30% faster for thinking sounds
     
     try:
-        # Generate TTS audio quickly
-        audio_data = await generate_tts_audio(text, voice="fable", speed=speed)
+        # Generate TTS audio quickly with faster model
+        audio_data = await generate_tts_audio(text, voice="fable", speed=speed, model="tts-1")
         if not audio_data:
             return
         
         # Save to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
             temp_file.write(audio_data.getvalue())
             temp_filename = temp_file.name
         
@@ -682,7 +717,7 @@ async def speak_thinking_sound_directly(guild_id: int, text: str):
             
             # Wait for this short sound to finish
             while voice_client.is_playing():
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)  # Reduced polling interval
         
         # Clean up temp file
         try:
@@ -744,20 +779,37 @@ async def speak_text_directly(guild_id: int, text: str):
     # Create optimized version for TTS (shorter = faster)
     tts_text, _ = create_tts_version_with_continuation(text)  # We only want the first part for voice
     
+    # Choose model based on quality settings
+    quality_mode = voice_quality.get(guild_id, "smart")  # Default to smart mode
+    
+    if quality_mode == "speed":
+        model = "tts-1"
+    elif quality_mode == "quality":
+        model = "tts-1-hd"
+    else:  # smart mode
+        # Use tts-1-hd for dramatic moments, tts-1 for regular responses
+        dramatic_keywords = ["critical", "natural 20", "initiative", "damage", "combat begins", "you take", "saving throw"]
+        if len(tts_text) < 120 and any(word in tts_text.lower() for word in dramatic_keywords):
+            model = "tts-1-hd"  # Use high quality for important moments
+        else:
+            model = "tts-1"  # Use speed for regular responses
+    
+    print(f"🎤 TTS: Using {model} for {len(tts_text)} chars in {quality_mode} mode")
+    
     # Generate TTS audio with optimized text
-    audio_data = await generate_tts_audio(tts_text, voice="fable", speed=speed)
+    audio_data = await generate_tts_audio(tts_text, voice="fable", speed=speed, model=model)
     if not audio_data:
         return
     
     # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix=".opus", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
         temp_file.write(audio_data.getvalue())
         temp_filename = temp_file.name
     
     try:
         # Wait for any current audio to finish
         while voice_client.is_playing():
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)  # Reduced polling interval
         
         # Play audio in voice channel
         audio_source = discord.FFmpegPCMAudio(temp_filename)
@@ -765,7 +817,7 @@ async def speak_text_directly(guild_id: int, text: str):
         
         # Wait for audio to finish
         while voice_client.is_playing():
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
             
     except Exception as e:
         print(f"Audio playback error: {e}")
@@ -952,8 +1004,6 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
         
     except Exception as e:
         print(f"❌ Enhanced Claude API error: {e}")
-        import traceback
-        traceback.print_exc()
         return f"The DM pauses momentarily as otherworldly forces intervene... (Enhanced Error: {str(e)})"
 
 # Keep the original function for fallback
@@ -1297,7 +1347,7 @@ async def unmute_tts(interaction: discord.Interaction):
 @app_commands.describe(speed="Speaking speed (0.5 = very slow, 1.0 = normal, 1.5 = fast, 2.0 = very fast)")
 async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
     """Adjust TTS speaking speed"""
-    guild_id = interaction.guild.id
+    guild_id = interaction.guild.id if interaction.guild else 0
     
     if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
         await interaction.response.send_message("❌ Donnie isn't in a voice channel! Use `/join_voice` first.", ephemeral=True)
@@ -1332,8 +1382,8 @@ async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
     )
     
     embed.add_field(
-        name="🎤 Realistic DM Experience",
-        value="Donnie now uses thinking sounds, paper shuffling, and natural DM behaviors while preparing responses!",
+        name="🎤 Optimized Performance",
+        value="Donnie uses smart model selection and enhanced text processing for faster responses!",
         inline=False
     )
     
@@ -2419,7 +2469,7 @@ try:
     )
     
     # Store reference for cleanup command
-    bot.pdf_character_commands = pdf_character_commands  # type: ignore
+    bot.pdf_character_commands = pdf_character_commands
     
     print("✅ PDF Character Sheet system initialized")
     
