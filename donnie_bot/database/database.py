@@ -1,123 +1,237 @@
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.exc import SQLAlchemyError
-from contextlib import contextmanager
+# database/database.py
+import sqlite3
+import threading
+from pathlib import Path
+from datetime import datetime
+import json
 import logging
-from .models import Base
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DatabaseManager:
-    def __init__(self):
-        self.engine = None
-        self.Session = None
-        self._initialized = False
-    
-    def initialize(self, database_url: str = None):
-        """Initialize database connection"""
-        if self._initialized:
-            return
+# Thread-local storage for database connections
+_local = threading.local()
+
+def get_db_connection():
+    """Get thread-local database connection"""
+    if not hasattr(_local, 'connection'):
+        db_path = Path("storm_kings_thunder.db")
+        _local.connection = sqlite3.connect(str(db_path), check_same_thread=False)
+        _local.connection.row_factory = sqlite3.Row  # Enable dict-like access
+    return _local.connection
+
+def init_database():
+    """Initialize the database with all required tables"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        if database_url is None:
-            # Default to SQLite for development, PostgreSQL for production
-            if os.getenv('ENVIRONMENT') == 'production':
-                database_url = os.getenv('DATABASE_URL')
-                if not database_url:
-                    raise ValueError("DATABASE_URL environment variable required for production")
-            else:
-                # SQLite for development
-                os.makedirs('data', exist_ok=True)
-                database_url = 'sqlite:///data/donnie_campaign.db'
+        logger.info("Initializing Storm King's Thunder database...")
         
-        try:
-            # Create engine with connection pooling
-            if database_url.startswith('sqlite'):
-                self.engine = create_engine(
-                    database_url,
-                    echo=False,  # Set to True for SQL logging
-                    connect_args={'check_same_thread': False}
-                )
-            else:
-                self.engine = create_engine(
-                    database_url,
-                    echo=False,
-                    pool_size=10,
-                    max_overflow=20,
-                    pool_pre_ping=True  # Verify connections before use
-                )
-            
-            # Create session factory
-            self.Session = scoped_session(
-                sessionmaker(bind=self.engine, expire_on_commit=False)
+        # Episodes table - Core episode management
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS episodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                episode_number INTEGER NOT NULL,
+                name TEXT,
+                start_time TIMESTAMP NOT NULL,
+                end_time TIMESTAMP,
+                summary TEXT,
+                scene_data TEXT,
+                session_history TEXT,  -- JSON array of session interactions
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, episode_number)
             )
-            
-            # Create all tables
-            Base.metadata.create_all(self.engine)
-            
-            self._initialized = True
-            logger.info(f"Database initialized: {database_url}")
-            
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to initialize database: {e}")
-            raise
-    
-    @contextmanager
-    def get_session(self):
-        """Context manager for database sessions"""
-        if not self._initialized:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+        ''')
         
-        session = self.Session()
-        try:
-            yield session
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Database session error: {e}")
-            raise
-        finally:
-            session.close()
-    
-    def health_check(self):
-        """Check if database is accessible"""
-        try:
-            with self.get_session() as session:
-                session.execute("SELECT 1")
-            return True
-        except Exception as e:
-            logger.error(f"Database health check failed: {e}")
-            return False
-    
-    def close(self):
-        """Close database connections"""
-        if self.Session:
-            self.Session.remove()
-        if self.engine:
-            self.engine.dispose()
-        self._initialized = False
-        logger.info("Database connections closed")
-
-# Global database manager instance
-db_manager = DatabaseManager()
-
-# Convenience functions
-def init_database(database_url: str = None):
-    """Initialize the database"""
-    db_manager.initialize(database_url)
-
-def get_db_session():
-    """Get a database session context manager"""
-    return db_manager.get_session()
+        # Character snapshots - Track character state at different points
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS character_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id INTEGER,
+                user_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                character_data TEXT NOT NULL,  -- JSON character data
+                snapshot_type TEXT NOT NULL,   -- 'episode_start', 'episode_end', 'level_up', 'manual'
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Character progression - Track level changes and major milestones
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS character_progression (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                episode_id INTEGER,
+                old_level INTEGER,
+                new_level INTEGER NOT NULL,
+                progression_type TEXT NOT NULL,  -- 'level_up', 'milestone', 'reward'
+                reason TEXT,
+                experience_gained INTEGER DEFAULT 0,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE SET NULL
+            )
+        ''')
+        
+        # Story notes - Player-added story elements (non-canonical)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS story_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id INTEGER,
+                user_id TEXT NOT NULL,
+                note_type TEXT NOT NULL,  -- 'player_note', 'dm_note', 'session_note'
+                content TEXT NOT NULL,
+                is_canonical BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Guild settings - Per-server configuration
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id TEXT PRIMARY KEY,
+                current_episode INTEGER,
+                voice_speed REAL DEFAULT 1.25,
+                voice_quality TEXT DEFAULT 'smart',
+                tts_enabled BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create useful indexes for performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_guild ON episodes(guild_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_episode ON character_snapshots(episode_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_user ON character_snapshots(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_progression_user ON character_progression(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_progression_episode ON character_progression(episode_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_story_notes_episode ON story_notes(episode_id)')
+        
+        conn.commit()
+        logger.info("✅ Database schema initialized successfully")
+        
+        # Log table creation
+        tables = ['episodes', 'character_snapshots', 'character_progression', 'story_notes', 'guild_settings']
+        for table in tables:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            count = cursor.fetchone()[0]
+            logger.info(f"📊 Table '{table}': {count} records")
+        
+    except sqlite3.Error as e:
+        logger.error(f"❌ Database initialization error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected error during database init: {e}")
+        raise
 
 def close_database():
-    """Close database connections"""
-    db_manager.close()
+    """Close the database connection"""
+    if hasattr(_local, 'connection'):
+        try:
+            _local.connection.close()
+            logger.info("🔒 Database connection closed")
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
+        finally:
+            if hasattr(_local, 'connection'):
+                delattr(_local, 'connection')
 
-# Auto-initialize on import if environment variables are set
-if os.getenv('AUTO_INIT_DB', 'true').lower() == 'true':
+def backup_database(backup_path: str = None):
+    """Create a backup of the database"""
     try:
-        init_database()
+        if backup_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"storm_kings_thunder_backup_{timestamp}.db"
+        
+        conn = get_db_connection()
+        backup_conn = sqlite3.connect(backup_path)
+        conn.backup(backup_conn)
+        backup_conn.close()
+        
+        logger.info(f"✅ Database backed up to: {backup_path}")
+        return backup_path
     except Exception as e:
-        logger.warning(f"Auto-initialization failed: {e}")
-        logger.info("Database will need to be manually initialized")
+        logger.error(f"❌ Backup failed: {e}")
+        raise
+
+def get_database_stats():
+    """Get database statistics for monitoring"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        stats = {}
+        
+        # Table counts
+        tables = ['episodes', 'character_snapshots', 'character_progression', 'story_notes', 'guild_settings']
+        for table in tables:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            stats[f"{table}_count"] = cursor.fetchone()[0]
+        
+        # Active episodes
+        cursor.execute("SELECT COUNT(*) FROM episodes WHERE end_time IS NULL")
+        stats["active_episodes"] = cursor.fetchone()[0]
+        
+        # Unique characters
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM character_snapshots")
+        stats["unique_characters"] = cursor.fetchone()[0]
+        
+        # Database size
+        cursor.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+        result = cursor.fetchone()
+        if result:
+            stats["database_size_bytes"] = result[0]
+        
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting database stats: {e}")
+        return {}
+
+# Utility functions for JSON handling
+def serialize_json(data):
+    """Safely serialize data to JSON string"""
+    if data is None:
+        return None
+    try:
+        return json.dumps(data, default=str, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"JSON serialization error: {e}")
+        return "{}"
+
+def deserialize_json(json_str):
+    """Safely deserialize JSON string to data"""
+    if not json_str:
+        return {}
+    try:
+        return json.loads(json_str)
+    except Exception as e:
+        logger.error(f"JSON deserialization error: {e}")
+        return {}
+
+# Database health check
+def health_check():
+    """Perform database health check"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Test basic connectivity
+        cursor.execute("SELECT 1")
+        result = cursor.fetchone()
+        
+        if result and result[0] == 1:
+            logger.info("✅ Database health check passed")
+            return True
+        else:
+            logger.error("❌ Database health check failed")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Database health check error: {e}")
+        return False

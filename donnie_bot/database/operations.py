@@ -1,387 +1,622 @@
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+# database/operations.py
+import sqlite3
 import logging
-from sqlalchemy.orm import joinedload
-from sqlalchemy import desc, and_
-
-from .database import get_db_session
-from .models import Campaign, Episode, Character, CharacterSnapshot, LevelProgression, PlayerNote, StoryMilestone
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
+from .database import get_db_connection, serialize_json, deserialize_json
 
 logger = logging.getLogger(__name__)
 
-class CampaignOperations:
-    """Campaign-level database operations"""
-    
-    @staticmethod
-    def get_or_create_campaign(guild_id: str, name: str = "Storm King's Thunder") -> Campaign:
-        """Get existing campaign or create new one for guild"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            
-            if not campaign:
-                campaign = Campaign(
-                    guild_id=guild_id,
-                    name=name,
-                    setting_description="The Sword Coast - Giants have begun raiding settlements across the land. The ancient ordning that kept giant society in check has collapsed, throwing giantkind into chaos.",
-                    current_scene="The village of Nightstone sits eerily quiet. Giant-sized boulders litter the village square, and not a soul can be seen moving in the streets. The party approaches the mysteriously open gates..."
-                )
-                session.add(campaign)
-                session.flush()  # Get the ID
-                logger.info(f"Created new campaign for guild {guild_id}")
-            
-            return campaign
-    
-    @staticmethod
-    def update_current_scene(guild_id: str, scene: str) -> bool:
-        """Update the current scene for a campaign"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if campaign:
-                campaign.current_scene = scene
-                return True
-            return False
+@dataclass
+class Episode:
+    """Episode data class"""
+    id: Optional[int] = None
+    guild_id: str = ""
+    episode_number: int = 0
+    name: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    summary: Optional[str] = None
+    scene_data: Optional[str] = None
+    session_history: Optional[List[Dict]] = None
+    created_at: Optional[datetime] = None
+
+@dataclass
+class CharacterSnapshot:
+    """Character snapshot data class"""
+    id: Optional[int] = None
+    episode_id: Optional[int] = None
+    user_id: str = ""
+    character_name: str = ""
+    character_data: Dict = None
+    snapshot_type: str = ""
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+@dataclass
+class CharacterProgression:
+    """Character progression data class"""
+    id: Optional[int] = None
+    user_id: str = ""
+    character_name: str = ""
+    episode_id: Optional[int] = None
+    old_level: Optional[int] = None
+    new_level: int = 1
+    progression_type: str = ""
+    reason: Optional[str] = None
+    experience_gained: int = 0
+    timestamp: Optional[datetime] = None
+
+class DatabaseOperationError(Exception):
+    """Custom exception for database operations"""
+    pass
 
 class EpisodeOperations:
-    """Episode-level database operations"""
+    """Handle all episode-related database operations"""
     
     @staticmethod
-    def start_new_episode(guild_id: str, episode_name: str = None) -> Tuple[Episode, bool]:
-        """Start a new episode, automatically ending the previous one"""
-        with get_db_session() as session:
-            campaign = CampaignOperations.get_or_create_campaign(guild_id)
+    def create_episode(guild_id: str, episode_number: int, name: str = None, 
+                      scene_data: str = None) -> Episode:
+        """Create a new episode"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            # End any active episode first
-            active_episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                status='active'
-            ).first()
+            start_time = datetime.now()
             
-            ended_previous = False
-            if active_episode:
-                EpisodeOperations._end_episode_internal(session, active_episode)
-                ended_previous = True
+            cursor.execute('''
+                INSERT INTO episodes (guild_id, episode_number, name, start_time, scene_data, session_history)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (guild_id, episode_number, name, start_time, scene_data, serialize_json([])))
             
-            # Create new episode
-            new_episode_number = campaign.current_episode_number + 1
-            episode = Episode(
-                campaign_id=campaign.id,
-                episode_number=new_episode_number,
-                name=episode_name or f"Episode {new_episode_number}",
-                starting_scene=campaign.current_scene,
-                major_events=[],
-                next_session_hooks=[]
+            episode_id = cursor.lastrowid
+            conn.commit()
+            
+            logger.info(f"✅ Created episode {episode_number} for guild {guild_id}")
+            
+            return Episode(
+                id=episode_id,
+                guild_id=guild_id,
+                episode_number=episode_number,
+                name=name,
+                start_time=start_time,
+                scene_data=scene_data,
+                session_history=[]
             )
             
-            session.add(episode)
-            
-            # Update campaign
-            campaign.current_episode_number = new_episode_number
-            
-            # Create character snapshots for episode start
-            characters = session.query(Character).filter_by(campaign_id=campaign.id).all()
-            for character in characters:
-                CharacterOperations._create_snapshot_internal(
-                    session, character, episode, 'episode_start'
-                )
-            
-            logger.info(f"Started episode {new_episode_number} for guild {guild_id}")
-            return episode, ended_previous
+        except sqlite3.IntegrityError as e:
+            if "UNIQUE constraint failed" in str(e):
+                raise DatabaseOperationError(f"Episode {episode_number} already exists for this server")
+            raise DatabaseOperationError(f"Episode creation failed: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error creating episode: {e}")
+            raise DatabaseOperationError(f"Failed to create episode: {e}")
     
     @staticmethod
-    def end_current_episode(guild_id: str, summary: str = None, dm_notes: str = None, 
-                          cliffhanger: str = None, next_hooks: List[str] = None) -> Optional[Episode]:
-        """End the current active episode"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
+    def get_episode(episode_id: int) -> Optional[Episode]:
+        """Get episode by ID"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM episodes WHERE id = ?', (episode_id,))
+            row = cursor.fetchone()
+            
+            if not row:
                 return None
             
-            active_episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                status='active'
-            ).first()
-            
-            if not active_episode:
-                return None
-            
-            return EpisodeOperations._end_episode_internal(
-                session, active_episode, summary, dm_notes, cliffhanger, next_hooks
+            return Episode(
+                id=row['id'],
+                guild_id=row['guild_id'],
+                episode_number=row['episode_number'],
+                name=row['name'],
+                start_time=datetime.fromisoformat(row['start_time']) if row['start_time'] else None,
+                end_time=datetime.fromisoformat(row['end_time']) if row['end_time'] else None,
+                summary=row['summary'],
+                scene_data=row['scene_data'],
+                session_history=deserialize_json(row['session_history']),
+                created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
             )
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting episode {episode_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get episode: {e}")
     
     @staticmethod
-    def _end_episode_internal(session, episode: Episode, summary: str = None, 
-                            dm_notes: str = None, cliffhanger: str = None, 
-                            next_hooks: List[str] = None) -> Episode:
-        """Internal method to end an episode (called within existing session)"""
-        episode.end_time = datetime.utcnow()
-        episode.duration_hours = (episode.end_time - episode.start_time).total_seconds() / 3600
-        episode.status = 'completed'
-        
-        if summary:
-            episode.summary = summary
-        if dm_notes:
-            episode.dm_notes = dm_notes
-        if cliffhanger:
-            episode.cliffhanger = cliffhanger
-        if next_hooks:
-            episode.next_session_hooks = next_hooks
-        
-        # Update ending scene
-        campaign = session.query(Campaign).filter_by(id=episode.campaign_id).first()
-        if campaign:
-            episode.ending_scene = campaign.current_scene
-        
-        # Create end-of-episode character snapshots
-        characters = session.query(Character).filter_by(campaign_id=episode.campaign_id).all()
-        for character in characters:
-            CharacterOperations._create_snapshot_internal(
-                session, character, episode, 'episode_end'
+    def get_current_episode(guild_id: str) -> Optional[Episode]:
+        """Get the current active episode for a guild"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM episodes 
+                WHERE guild_id = ? AND end_time IS NULL 
+                ORDER BY episode_number DESC 
+                LIMIT 1
+            ''', (guild_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            return Episode(
+                id=row['id'],
+                guild_id=row['guild_id'],
+                episode_number=row['episode_number'],
+                name=row['name'],
+                start_time=datetime.fromisoformat(row['start_time']) if row['start_time'] else None,
+                end_time=None,
+                summary=row['summary'],
+                scene_data=row['scene_data'],
+                session_history=deserialize_json(row['session_history']),
+                created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
             )
-        
-        logger.info(f"Ended episode {episode.episode_number}")
-        return episode
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting current episode for guild {guild_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get current episode: {e}")
+    
+    @staticmethod
+    def end_episode(episode_id: int, summary: str = None) -> bool:
+        """End an episode"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            end_time = datetime.now()
+            
+            cursor.execute('''
+                UPDATE episodes 
+                SET end_time = ?, summary = ? 
+                WHERE id = ? AND end_time IS NULL
+            ''', (end_time, summary, episode_id))
+            
+            if cursor.rowcount == 0:
+                logger.warning(f"No active episode found with ID {episode_id}")
+                return False
+            
+            conn.commit()
+            logger.info(f"✅ Episode {episode_id} ended successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error ending episode {episode_id}: {e}")
+            raise DatabaseOperationError(f"Failed to end episode: {e}")
+    
+    @staticmethod
+    def update_session_history(episode_id: int, session_history: List[Dict]) -> bool:
+        """Update episode's session history"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE episodes 
+                SET session_history = ? 
+                WHERE id = ?
+            ''', (serialize_json(session_history), episode_id))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating session history for episode {episode_id}: {e}")
+            raise DatabaseOperationError(f"Failed to update session history: {e}")
     
     @staticmethod
     def get_episode_history(guild_id: str, limit: int = 10) -> List[Episode]:
-        """Get recent episode history"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return []
+        """Get episode history for a guild"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            return session.query(Episode).filter_by(campaign_id=campaign.id)\
-                .order_by(desc(Episode.episode_number))\
-                .limit(limit).all()
+            cursor.execute('''
+                SELECT * FROM episodes 
+                WHERE guild_id = ? 
+                ORDER BY episode_number DESC 
+                LIMIT ?
+            ''', (guild_id, limit))
+            
+            episodes = []
+            for row in cursor.fetchall():
+                episodes.append(Episode(
+                    id=row['id'],
+                    guild_id=row['guild_id'],
+                    episode_number=row['episode_number'],
+                    name=row['name'],
+                    start_time=datetime.fromisoformat(row['start_time']) if row['start_time'] else None,
+                    end_time=datetime.fromisoformat(row['end_time']) if row['end_time'] else None,
+                    summary=row['summary'],
+                    scene_data=row['scene_data'],
+                    session_history=deserialize_json(row['session_history']),
+                    created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
+                ))
+            
+            return episodes
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting episode history for guild {guild_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get episode history: {e}")
     
     @staticmethod
-    def get_episode_recap_data(guild_id: str, episode_number: int = None) -> Optional[Dict]:
-        """Get data for generating episode recap"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return None
+    def get_next_episode_number(guild_id: str) -> int:
+        """Get the next episode number for a guild"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            if episode_number is None:
-                episode_number = campaign.current_episode_number - 1
+            cursor.execute('''
+                SELECT MAX(episode_number) FROM episodes WHERE guild_id = ?
+            ''', (guild_id,))
             
-            episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                episode_number=episode_number
-            ).options(
-                joinedload(Episode.character_snapshots),
-                joinedload(Episode.story_milestones),
-                joinedload(Episode.player_notes)
-            ).first()
+            result = cursor.fetchone()
+            max_episode = result[0] if result[0] is not None else 0
             
-            if not episode:
-                return None
+            return max_episode + 1
             
-            return {
-                'episode': episode,
-                'character_changes': [s for s in episode.character_snapshots if s.snapshot_type == 'episode_end'],
-                'story_milestones': episode.story_milestones,
-                'major_events': episode.major_events or [],
-                'cliffhanger': episode.cliffhanger,
-                'player_notes': [n for n in episode.player_notes if n.is_public]
-            }
+        except Exception as e:
+            logger.error(f"❌ Error getting next episode number for guild {guild_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get next episode number: {e}")
 
 class CharacterOperations:
-    """Character-level database operations"""
+    """Handle all character-related database operations"""
     
     @staticmethod
-    def sync_character_from_context(guild_id: str, discord_user_id: str, character_data: Dict) -> Character:
-        """Sync character from campaign_context to database"""
-        with get_db_session() as session:
-            campaign = CampaignOperations.get_or_create_campaign(guild_id)
+    def create_character_snapshot(episode_id: int, user_id: str, character_name: str,
+                                character_data: Dict, snapshot_type: str,
+                                notes: str = None) -> CharacterSnapshot:
+        """Create a character snapshot"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            character = session.query(Character).filter_by(
-                campaign_id=campaign.id,
-                discord_user_id=discord_user_id
-            ).first()
+            created_at = datetime.now()
             
-            if not character:
-                character = Character(
-                    campaign_id=campaign.id,
-                    discord_user_id=discord_user_id,
-                    player_name=character_data['player_name'],
-                    name=character_data['name'],
-                    race=character_data['race'],
-                    character_class=character_data['class'],
-                    current_level=character_data['level'],
-                    background=character_data.get('background'),
-                    stats=character_data.get('stats'),
-                    equipment=character_data.get('equipment'),
-                    spells=character_data.get('spells'),
-                    affiliations=character_data.get('affiliations'),
-                    personality=character_data.get('personality')
-                )
-                session.add(character)
-                logger.info(f"Created new character {character_data['name']} for user {discord_user_id}")
+            cursor.execute('''
+                INSERT INTO character_snapshots 
+                (episode_id, user_id, character_name, character_data, snapshot_type, notes, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (episode_id, user_id, character_name, serialize_json(character_data),
+                  snapshot_type, notes, created_at))
+            
+            snapshot_id = cursor.lastrowid
+            conn.commit()
+            
+            logger.info(f"✅ Created {snapshot_type} snapshot for {character_name}")
+            
+            return CharacterSnapshot(
+                id=snapshot_id,
+                episode_id=episode_id,
+                user_id=user_id,
+                character_name=character_name,
+                character_data=character_data,
+                snapshot_type=snapshot_type,
+                notes=notes,
+                created_at=created_at
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating character snapshot: {e}")
+            raise DatabaseOperationError(f"Failed to create character snapshot: {e}")
+    
+    @staticmethod
+    def get_character_snapshots(user_id: str, episode_id: int = None) -> List[CharacterSnapshot]:
+        """Get character snapshots for a user"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            if episode_id:
+                cursor.execute('''
+                    SELECT * FROM character_snapshots 
+                    WHERE user_id = ? AND episode_id = ?
+                    ORDER BY created_at DESC
+                ''', (user_id, episode_id))
             else:
-                # Update existing character
-                character.player_name = character_data['player_name']
-                character.current_level = character_data['level']
-                character.background = character_data.get('background')
-                character.stats = character_data.get('stats')
-                character.equipment = character_data.get('equipment')
-                character.spells = character_data.get('spells')
-                character.affiliations = character_data.get('affiliations')
-                character.personality = character_data.get('personality')
-                character.last_updated = datetime.utcnow()
+                cursor.execute('''
+                    SELECT * FROM character_snapshots 
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                ''', (user_id,))
             
-            return character
+            snapshots = []
+            for row in cursor.fetchall():
+                snapshots.append(CharacterSnapshot(
+                    id=row['id'],
+                    episode_id=row['episode_id'],
+                    user_id=row['user_id'],
+                    character_name=row['character_name'],
+                    character_data=deserialize_json(row['character_data']),
+                    snapshot_type=row['snapshot_type'],
+                    notes=row['notes'],
+                    created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
+                ))
+            
+            return snapshots
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting character snapshots for {user_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get character snapshots: {e}")
     
     @staticmethod
-    def level_up_character(guild_id: str, discord_user_id: str, new_level: int, reason: str = None) -> bool:
-        """Record character level progression"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return False
+    def get_latest_character_snapshot(user_id: str) -> Optional[CharacterSnapshot]:
+        """Get the most recent character snapshot for a user"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            character = session.query(Character).filter_by(
-                campaign_id=campaign.id,
-                discord_user_id=discord_user_id
-            ).first()
+            cursor.execute('''
+                SELECT * FROM character_snapshots 
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            ''', (user_id,))
             
-            if not character or character.current_level >= new_level:
-                return False
+            row = cursor.fetchone()
+            if not row:
+                return None
             
-            # Get current episode
-            current_episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                status='active'
-            ).first()
+            return CharacterSnapshot(
+                id=row['id'],
+                episode_id=row['episode_id'],
+                user_id=row['user_id'],
+                character_name=row['character_name'],
+                character_data=deserialize_json(row['character_data']),
+                snapshot_type=row['snapshot_type'],
+                notes=row['notes'],
+                created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
+            )
             
-            if not current_episode:
-                return False
+        except Exception as e:
+            logger.error(f"❌ Error getting latest character snapshot for {user_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get latest character snapshot: {e}")
+    
+    @staticmethod
+    def record_character_progression(user_id: str, character_name: str, new_level: int,
+                                   progression_type: str, reason: str = None,
+                                   old_level: int = None, episode_id: int = None,
+                                   experience_gained: int = 0) -> CharacterProgression:
+        """Record character progression"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            # Record level progression
-            progression = LevelProgression(
-                character_id=character.id,
-                episode_id=current_episode.id,
-                old_level=character.current_level,
+            timestamp = datetime.now()
+            
+            cursor.execute('''
+                INSERT INTO character_progression 
+                (user_id, character_name, episode_id, old_level, new_level, 
+                 progression_type, reason, experience_gained, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, character_name, episode_id, old_level, new_level,
+                  progression_type, reason, experience_gained, timestamp))
+            
+            progression_id = cursor.lastrowid
+            conn.commit()
+            
+            logger.info(f"✅ Recorded {progression_type} for {character_name}: Level {old_level} → {new_level}")
+            
+            return CharacterProgression(
+                id=progression_id,
+                user_id=user_id,
+                character_name=character_name,
+                episode_id=episode_id,
+                old_level=old_level,
                 new_level=new_level,
-                reason=reason or f"Leveled from {character.current_level} to {new_level}"
-            )
-            session.add(progression)
-            
-            # Update character
-            old_level = character.current_level
-            character.current_level = new_level
-            character.last_updated = datetime.utcnow()
-            
-            # Create level-up snapshot
-            CharacterOperations._create_snapshot_internal(
-                session, character, current_episode, 'level_up',
-                notes=f"Leveled up from {old_level} to {new_level}. {reason or ''}"
+                progression_type=progression_type,
+                reason=reason,
+                experience_gained=experience_gained,
+                timestamp=timestamp
             )
             
-            logger.info(f"Character {character.name} leveled up to {new_level}")
-            return True
+        except Exception as e:
+            logger.error(f"❌ Error recording character progression: {e}")
+            raise DatabaseOperationError(f"Failed to record character progression: {e}")
     
     @staticmethod
-    def _create_snapshot_internal(session, character: Character, episode: Episode, 
-                                snapshot_type: str, notes: str = None):
-        """Create character snapshot (internal method)"""
-        snapshot = CharacterSnapshot(
-            character_id=character.id,
-            episode_id=episode.id,
-            snapshot_type=snapshot_type,
-            level=character.current_level,
-            hp_current=character.current_hp,
-            hp_max=character.max_hp,
-            equipment_snapshot=character.equipment,
-            spells_snapshot=character.spells,
-            notes=notes
-        )
-        session.add(snapshot)
+    def get_character_progression_history(user_id: str) -> List[CharacterProgression]:
+        """Get character progression history for a user"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT cp.*, e.episode_number, e.name as episode_name
+                FROM character_progression cp
+                LEFT JOIN episodes e ON cp.episode_id = e.id
+                WHERE cp.user_id = ?
+                ORDER BY cp.timestamp DESC
+            ''', (user_id,))
+            
+            progressions = []
+            for row in cursor.fetchall():
+                progressions.append(CharacterProgression(
+                    id=row['id'],
+                    user_id=row['user_id'],
+                    character_name=row['character_name'],
+                    episode_id=row['episode_id'],
+                    old_level=row['old_level'],
+                    new_level=row['new_level'],
+                    progression_type=row['progression_type'],
+                    reason=row['reason'],
+                    experience_gained=row['experience_gained'],
+                    timestamp=datetime.fromisoformat(row['timestamp']) if row['timestamp'] else None
+                ))
+            
+            return progressions
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting character progression history for {user_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get character progression history: {e}")
     
     @staticmethod
-    def get_character_progression(guild_id: str, discord_user_id: str) -> List[Dict]:
-        """Get character progression history"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return []
+    def get_party_progression(episode_id: int) -> List[CharacterProgression]:
+        """Get all character progressions for an episode"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            character = session.query(Character).filter_by(
-                campaign_id=campaign.id,
-                discord_user_id=discord_user_id
-            ).first()
+            cursor.execute('''
+                SELECT * FROM character_progression 
+                WHERE episode_id = ?
+                ORDER BY timestamp DESC
+            ''', (episode_id,))
             
-            if not character:
-                return []
+            progressions = []
+            for row in cursor.fetchall():
+                progressions.append(CharacterProgression(
+                    id=row['id'],
+                    user_id=row['user_id'],
+                    character_name=row['character_name'],
+                    episode_id=row['episode_id'],
+                    old_level=row['old_level'],
+                    new_level=row['new_level'],
+                    progression_type=row['progression_type'],
+                    reason=row['reason'],
+                    experience_gained=row['experience_gained'],
+                    timestamp=datetime.fromisoformat(row['timestamp']) if row['timestamp'] else None
+                ))
             
-            progressions = session.query(LevelProgression).filter_by(character_id=character.id)\
-                .order_by(LevelProgression.level_gained).all()
+            return progressions
             
-            return [{
-                'episode_number': p.episode.episode_number,
-                'episode_name': p.episode.name,
-                'old_level': p.old_level,
-                'new_level': p.new_level,
-                'reason': p.reason,
-                'date': p.level_gained
-            } for p in progressions]
+        except Exception as e:
+            logger.error(f"❌ Error getting party progression for episode {episode_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get party progression: {e}")
 
-class PlayerNoteOperations:
-    """Player note operations"""
+class StoryOperations:
+    """Handle story notes and additional content"""
     
     @staticmethod
-    def add_player_note(guild_id: str, discord_user_id: str, player_name: str, 
-                       content: str, note_type: str = 'player_observation', 
-                       is_public: bool = True) -> bool:
-        """Add a player note to current episode"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return False
+    def add_story_note(episode_id: int, user_id: str, content: str, 
+                      note_type: str = "player_note", is_canonical: bool = False) -> int:
+        """Add a story note"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            current_episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                status='active'
-            ).first()
+            cursor.execute('''
+                INSERT INTO story_notes (episode_id, user_id, note_type, content, is_canonical)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (episode_id, user_id, note_type, content, is_canonical))
             
-            if not current_episode:
-                return False
+            note_id = cursor.lastrowid
+            conn.commit()
             
-            note = PlayerNote(
-                episode_id=current_episode.id,
-                discord_user_id=discord_user_id,
-                player_name=player_name,
-                note_type=note_type,
-                content=content,
-                is_public=is_public,
-                is_canonical=False  # Player notes are never canonical
-            )
-            session.add(note)
+            logger.info(f"✅ Added {note_type} to episode {episode_id}")
+            return note_id
             
-            logger.info(f"Added player note from {player_name}")
+        except Exception as e:
+            logger.error(f"❌ Error adding story note: {e}")
+            raise DatabaseOperationError(f"Failed to add story note: {e}")
+    
+    @staticmethod
+    def get_episode_story_notes(episode_id: int) -> List[Dict]:
+        """Get all story notes for an episode"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM story_notes 
+                WHERE episode_id = ?
+                ORDER BY created_at ASC
+            ''', (episode_id,))
+            
+            notes = []
+            for row in cursor.fetchall():
+                notes.append({
+                    'id': row['id'],
+                    'episode_id': row['episode_id'],
+                    'user_id': row['user_id'],
+                    'note_type': row['note_type'],
+                    'content': row['content'],
+                    'is_canonical': bool(row['is_canonical']),
+                    'created_at': row['created_at']
+                })
+            
+            return notes
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting story notes for episode {episode_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get story notes: {e}")
+
+class GuildOperations:
+    """Handle guild-specific settings"""
+    
+    @staticmethod
+    def update_guild_settings(guild_id: str, **settings) -> bool:
+        """Update guild settings"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Check if guild exists
+            cursor.execute('SELECT guild_id FROM guild_settings WHERE guild_id = ?', (guild_id,))
+            exists = cursor.fetchone()
+            
+            if exists:
+                # Update existing
+                set_clauses = []
+                values = []
+                for key, value in settings.items():
+                    set_clauses.append(f"{key} = ?")
+                    values.append(value)
+                
+                if set_clauses:
+                    set_clauses.append("updated_at = ?")
+                    values.append(datetime.now())
+                    values.append(guild_id)
+                    
+                    query = f"UPDATE guild_settings SET {', '.join(set_clauses)} WHERE guild_id = ?"
+                    cursor.execute(query, values)
+            else:
+                # Insert new
+                cursor.execute('''
+                    INSERT INTO guild_settings (guild_id, current_episode, voice_speed, voice_quality, tts_enabled)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (guild_id, 
+                      settings.get('current_episode', 0),
+                      settings.get('voice_speed', 1.25),
+                      settings.get('voice_quality', 'smart'),
+                      settings.get('tts_enabled', False)))
+            
+            conn.commit()
             return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating guild settings: {e}")
+            raise DatabaseOperationError(f"Failed to update guild settings: {e}")
     
     @staticmethod
-    def get_episode_player_notes(guild_id: str, episode_number: int = None, 
-                               public_only: bool = True) -> List[PlayerNote]:
-        """Get player notes for an episode"""
-        with get_db_session() as session:
-            campaign = session.query(Campaign).filter_by(guild_id=guild_id).first()
-            if not campaign:
-                return []
+    def get_guild_settings(guild_id: str) -> Dict:
+        """Get guild settings"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            if episode_number is None:
-                episode_number = campaign.current_episode_number
+            cursor.execute('SELECT * FROM guild_settings WHERE guild_id = ?', (guild_id,))
+            row = cursor.fetchone()
             
-            episode = session.query(Episode).filter_by(
-                campaign_id=campaign.id,
-                episode_number=episode_number
-            ).first()
+            if not row:
+                return {
+                    'current_episode': 0,
+                    'voice_speed': 1.25,
+                    'voice_quality': 'smart',
+                    'tts_enabled': False
+                }
             
-            if not episode:
-                return []
+            return {
+                'guild_id': row['guild_id'],
+                'current_episode': row['current_episode'],
+                'voice_speed': row['voice_speed'],
+                'voice_quality': row['voice_quality'],
+                'tts_enabled': bool(row['tts_enabled']),
+                'created_at': row['created_at'],
+                'updated_at': row['updated_at']
+            }
             
-            query = session.query(PlayerNote).filter_by(episode_id=episode.id)
-            if public_only:
-                query = query.filter_by(is_public=True)
-            
-            return query.order_by(PlayerNote.created_time).all()
+        except Exception as e:
+            logger.error(f"❌ Error getting guild settings: {e}")
+            raise DatabaseOperationError(f"Failed to get guild settings: {e}")

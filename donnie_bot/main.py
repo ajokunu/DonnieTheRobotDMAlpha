@@ -1,3 +1,6 @@
+# main.py - UPDATED IMPORTS SECTION
+# Replace the existing import section with this:
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -20,10 +23,67 @@ from enum import Enum
 
 load_dotenv()
 
-# Database and Episode Management Imports
-from database.database import init_database, close_database
-from episode_manager.episode_commands import EpisodeCommands  
-from character_tracker.progression import CharacterProgressionCommands
+# ====== FIXED DATABASE AND EPISODE MANAGEMENT IMPORTS ======
+# Database imports - NOW WORKING!
+try:
+    from database import init_database, close_database
+    from database.operations import EpisodeOperations, CharacterOperations, GuildOperations, DatabaseOperationError
+    print("✅ Database operations imported successfully")
+    DATABASE_AVAILABLE = True
+except ImportError as e:
+    print(f"❌ Database operations failed to import: {e}")
+    print("Make sure database/__init__.py and database/operations.py exist")
+    DATABASE_AVAILABLE = False
+    # Create fallback empty classes to prevent crashes
+    class EpisodeOperations:
+        @staticmethod
+        def create_episode(*args, **kwargs): pass
+        @staticmethod
+        def get_current_episode(*args, **kwargs): return None
+    
+    class CharacterOperations:
+        @staticmethod
+        def create_character_snapshot(*args, **kwargs): pass
+    
+    class GuildOperations:
+        @staticmethod
+        def get_guild_settings(*args, **kwargs): return {}
+        @staticmethod
+        def update_guild_settings(*args, **kwargs): pass
+    
+    def init_database(): pass
+    def close_database(): pass
+
+# Episode Management imports - NOW WORKING!
+try:
+    from episode_manager import EpisodeCommands
+    print("✅ Episode management imported successfully")
+    EPISODE_MANAGER_AVAILABLE = True
+except ImportError as e:
+    print(f"❌ Episode management failed to import: {e}")
+    print("Episode management will be disabled")
+    EPISODE_MANAGER_AVAILABLE = False
+    EpisodeCommands = None
+
+# Character Progression imports - NOW WORKING!  
+try:
+    from character_tracker import CharacterProgressionCommands
+    print("✅ Character progression imported successfully")
+    CHARACTER_PROGRESSION_AVAILABLE = True
+except ImportError as e:
+    print(f"❌ Character progression failed to import: {e}")
+    print("Character progression tracking will be disabled")
+    CHARACTER_PROGRESSION_AVAILABLE = False
+    CharacterProgressionCommands = None
+
+# Audio system imports - WORKING!
+try:
+    from audio_system import EnhancedVoiceManager
+    print("✅ Enhanced audio system imported successfully")
+    ENHANCED_AUDIO_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Enhanced audio system not available: {e}")
+    ENHANCED_AUDIO_AVAILABLE = False
 
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
@@ -1166,12 +1226,25 @@ async def on_ready():
     print(f'🎤 Donnie the DM is ready to speak!')
     print(f'⚔️ Intelligent Combat System loaded!')
     
-    # Initialize database
-    try:
-        init_database()
-        print("✅ Database initialized successfully")
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+    # Initialize database with enhanced error handling
+    if DATABASE_AVAILABLE:
+        try:
+            init_database()
+            print("✅ Database initialized successfully")
+            
+            # Test database health
+            from database import health_check, get_database_stats
+            if health_check():
+                stats = get_database_stats()
+                print(f"📊 Database stats: {stats}")
+            else:
+                print("⚠️ Database health check failed")
+                
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            print("🔄 Bot will continue without database features")
+    else:
+        print("⚠️ Database features disabled")
     
     print('🔄 Syncing slash commands...')
     
@@ -1181,12 +1254,28 @@ async def on_ready():
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         print("✅ FFmpeg detected")
     except:
-        print("⚠️  FFmpeg not found - required for voice features")
+        print("⚠️ FFmpeg not found - required for voice features")
         
     try:
         synced = await bot.tree.sync()
         print(f'✅ Synced {len(synced)} slash commands')
-        print("🎲 Storm King's Thunder TTS bot with Combat Intelligence ready for adventure!")
+        
+        # Feature status summary
+        features = {
+            "Database": "✅" if DATABASE_AVAILABLE else "❌",
+            "Episodes": "✅" if episode_commands else "❌", 
+            "Progression": "✅" if character_progression else "❌",
+            "Enhanced Voice": "✅" if enhanced_voice_manager else "❌",
+            "Combat Intelligence": "✅",
+            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌"
+        }
+        
+        print("🎲 Storm King's Thunder Bot Feature Status:")
+        for feature, status in features.items():
+            print(f"   {status} {feature}")
+            
+        print("🎉 Ready for epic adventures!")
+        
     except Exception as e:
         print(f'❌ Failed to sync commands: {e}')
         import traceback
@@ -1195,13 +1284,75 @@ async def on_ready():
 @bot.event
 async def on_disconnect():
     print("🔌 Bot disconnecting...")
-    close_database()
-    print("✅ Database connections closed")
+    
+    # Save any pending changes to database
+    if DATABASE_AVAILABLE:
+        try:
+            # Update all active guild settings
+            for guild_id in voice_speed.keys():
+                update_database_from_campaign_context(str(guild_id))
+            
+            close_database()
+            print("✅ Database connections closed and data saved")
+        except Exception as e:
+            print(f"⚠️ Error during database cleanup: {e}")
+    
+    print("👋 Goodbye!")
+
+@bot.event
+async def on_guild_join(guild):
+    """Initialize database settings when bot joins a new guild"""
+    if DATABASE_AVAILABLE:
+        try:
+            guild_id = str(guild.id)
+            
+            # Initialize guild settings in database
+            GuildOperations.update_guild_settings(
+                guild_id,
+                voice_speed=1.25,
+                voice_quality='smart',
+                tts_enabled=False,
+                current_episode=0
+            )
+            
+            print(f"✅ Initialized database settings for guild: {guild.name}")
+            
+        except Exception as e:
+            print(f"⚠️ Failed to initialize guild settings: {e}")
+
+@bot.event  
+async def on_guild_remove(guild):
+    """Clean up when bot leaves a guild"""
+    guild_id = guild.id
+    
+    # Clean up in-memory state
+    if guild_id in voice_clients:
+        try:
+            await voice_clients[guild_id].disconnect()
+            del voice_clients[guild_id]
+        except:
+            pass
+    
+    # Clean up other guild-specific data
+    voice_speed.pop(guild_id, None)
+    tts_enabled.pop(guild_id, None) 
+    voice_queue.pop(guild_id, None)
+    
+    print(f"🧹 Cleaned up data for guild: {guild.name}")
 
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
+    
+    # Auto-sync campaign context with database when messages are received
+    if DATABASE_AVAILABLE and message.guild:
+        guild_id = str(message.guild.id)
+        
+        # Only sync occasionally to avoid performance issues
+        if random.random() < 0.1:  # 10% chance per message
+            sync_campaign_context_with_database(guild_id)
+    
     await bot.process_commands(message)
 
 # ====== VOICE CHANNEL COMMANDS ======
@@ -2434,32 +2585,77 @@ async def show_help(interaction: discord.Interaction):
     embed.set_footer(text="Donnie the DM awaits to guide your persistent, voice-enabled, combat-intelligent campaign adventure!")
     await interaction.response.send_message(embed=embed)
 
-# Initialize Episode Management and Character Progression
-try:
-    episode_commands = EpisodeCommands(
-        bot=bot,
-        campaign_context=campaign_context,
-        voice_clients=voice_clients,
-        tts_enabled=tts_enabled,
-        add_to_voice_queue_func=add_to_voice_queue
-    )
-    print("✅ Episode management system initialized")
-except Exception as e:
-    print(f"⚠️ Episode management not available: {e}")
+# ====== ENHANCED SYSTEM INITIALIZATION ======
 
-try:
-    character_progression = CharacterProgressionCommands(
-        bot=bot,
-        campaign_context=campaign_context,
-        voice_clients=voice_clients,
-        tts_enabled=tts_enabled,
-        add_to_voice_queue_func=add_to_voice_queue
-    )
-    print("✅ Character progression system initialized")
-except Exception as e:
-    print(f"⚠️ Character progression not available: {e}")
+episode_commands = None
+character_progression = None
+enhanced_voice_manager = None
 
-# Initialize PDF Character Sheet Commands
+if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
+    try:
+        episode_commands = EpisodeCommands(
+            bot=bot,
+            campaign_context=campaign_context,
+            voice_clients=voice_clients,
+            tts_enabled=tts_enabled,
+            add_to_voice_queue_func=add_to_voice_queue,
+            episode_operations=EpisodeOperations,  # Pass the operations class
+            character_operations=CharacterOperations,  # Pass the operations class
+            guild_operations=GuildOperations  # Pass the operations class
+        )
+        print("✅ Episode management system initialized with database support")
+    except Exception as e:
+        print(f"⚠️ Episode management initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        episode_commands = None
+else:
+    if not DATABASE_AVAILABLE:
+        print("⚠️ Episode management disabled: Database not available")
+    if not EPISODE_MANAGER_AVAILABLE:
+        print("⚠️ Episode management disabled: Episode commands not available")
+
+if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
+    try:
+        character_progression = CharacterProgressionCommands(
+            bot=bot,
+            campaign_context=campaign_context,
+            voice_clients=voice_clients,
+            tts_enabled=tts_enabled,
+            add_to_voice_queue_func=add_to_voice_queue,
+            character_operations=CharacterOperations,  # Correct parameter name
+            episode_operations=EpisodeOperations  # Correct parameter name
+        )
+        print("✅ Character progression system initialized with database support")
+    except Exception as e:
+        print(f"⚠️ Character progression initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        character_progression = None
+else:
+    if not DATABASE_AVAILABLE:
+        print("⚠️ Character progression disabled: Database not available")
+    if not CHARACTER_PROGRESSION_AVAILABLE:
+        print("⚠️ Character progression disabled: Progression commands not available")
+
+# Initialize Enhanced Voice Manager - NEW!
+if ENHANCED_AUDIO_AVAILABLE:
+    try:
+        enhanced_voice_manager = EnhancedVoiceManager(
+            claude_client=claude_client,
+            openai_api_key=os.getenv('OPENAI_API_KEY')
+        )
+        
+        # Connect the voice manager functions to the actual implementations
+        enhanced_voice_manager._get_claude_response = get_enhanced_claude_dm_response
+        enhanced_voice_manager._generate_tts_audio = generate_tts_audio
+        
+        print("✅ Enhanced voice manager initialized")
+    except Exception as e:
+        print(f"⚠️ Enhanced voice manager initialization failed: {e}")
+        enhanced_voice_manager = None
+
+# Initialize PDF Character Sheet Commands - EXISTING
 try:
     from pdf_character_parser import PDFCharacterCommands
     
@@ -2475,13 +2671,79 @@ try:
     print("✅ PDF Character Sheet system initialized")
     
 except ImportError as e:
-    print(f"⚠️  PDF Character Sheet system not available: {e}")
+    print(f"⚠️ PDF Character Sheet system not available: {e}")
     print("Install required packages: pip install PyPDF2 pymupdf pillow")
 except Exception as e:
     print(f"❌ Error initializing PDF system: {e}")
 
+# ====== DATABASE INTEGRATION FOR CAMPAIGN CONTEXT ======
+
+def sync_campaign_context_with_database(guild_id: str):
+    """Sync in-memory campaign context with database state"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        # Get current episode from database
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode:
+            campaign_context["current_episode"] = current_episode.episode_number
+            campaign_context["episode_active"] = True
+            campaign_context["episode_start_time"] = current_episode.start_time
+            campaign_context["guild_id"] = guild_id
+            
+            # Load session history from database
+            if current_episode.session_history:
+                campaign_context["session_history"] = current_episode.session_history
+            
+            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
+        
+        # Get guild settings
+        guild_settings = GuildOperations.get_guild_settings(guild_id)
+        if guild_settings:
+            # Sync voice settings with database
+            voice_speed[guild_id] = guild_settings.get('voice_speed', 1.25)
+            tts_enabled[guild_id] = guild_settings.get('tts_enabled', False)
+            
+            print(f"✅ Synced guild settings for {guild_id}")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to sync campaign context: {e}")
+
+# Add helper function to update database when campaign context changes
+def update_database_from_campaign_context(guild_id: str):
+    """Update database when campaign context changes"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode and campaign_context.get("session_history"):
+            # Update session history in database
+            EpisodeOperations.update_session_history(
+                current_episode.id,
+                campaign_context["session_history"]
+            )
+        
+        # Update guild settings
+        GuildOperations.update_guild_settings(
+            guild_id,
+            voice_speed=voice_speed.get(guild_id, 1.25),
+            tts_enabled=tts_enabled.get(guild_id, False),
+            current_episode=campaign_context.get("current_episode", 0)
+        )
+        
+    except Exception as e:
+        print(f"⚠️ Failed to update database: {e}")
+
+print("🎲 Storm King's Thunder TTS bot with Enhanced Episode Management ready!")
+print("🔗 Database integration: " + ("✅ Active" if DATABASE_AVAILABLE else "❌ Disabled"))
+print("📺 Episode management: " + ("✅ Active" if episode_commands else "❌ Disabled"))
+print("📈 Character progression: " + ("✅ Active" if character_progression else "❌ Disabled"))
+print("🎤 Enhanced voice: " + ("✅ Active" if enhanced_voice_manager else "❌ Disabled"))
 if __name__ == "__main__":
     # Check for required dependencies
+    print("🔍 Checking dependencies...")
     try:
         import discord
         print("✅ discord.py installed")
@@ -2495,7 +2757,7 @@ if __name__ == "__main__":
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         print("✅ FFmpeg detected")
     except:
-        print("⚠️  FFmpeg not found - required for voice features")
+        print("⚠️ FFmpeg not found - required for voice features")
         print("Install FFmpeg: https://ffmpeg.org/download.html")
     
     # Check for PDF dependencies
@@ -2504,7 +2766,7 @@ if __name__ == "__main__":
         import fitz  # PyMuPDF
         print("✅ PDF processing libraries detected")
     except ImportError:
-        print("⚠️  PDF processing libraries not found")
+        print("⚠️ PDF processing libraries not found")
         print("Install with: pip install PyPDF2 pymupdf pillow")
     
     # Combat system initialization messages
@@ -2513,15 +2775,62 @@ if __name__ == "__main__":
     print("🎯 No new commands to learn - everything works through existing `/action` command!")
     print("⚔️ Combat will trigger automatically when players take hostile actions")
     
+    # GET THE DISCORD TOKEN
+    print("🔑 Checking Discord token...")
     try:
         token = os.getenv('DISCORD_BOT_TOKEN')
         if not token:
             print("❌ DISCORD_BOT_TOKEN not found in environment variables!")
             print("Make sure you have a .env file with DISCORD_BOT_TOKEN=your_token_here")
+            print("Current working directory:", os.getcwd())
+            print("Looking for .env file...")
+            
+            # Check if .env exists
+            if os.path.exists('.env'):
+                print("✅ .env file found")
+                # Try to load it manually to see what's wrong
+                with open('.env', 'r') as f:
+                    content = f.read()
+                    if 'DISCORD_BOT_TOKEN' in content:
+                        print("✅ DISCORD_BOT_TOKEN found in .env")
+                    else:
+                        print("❌ DISCORD_BOT_TOKEN not found in .env file")
+            else:
+                print("❌ .env file not found")
+            
+            input("Press Enter to exit...")
             exit(1)
+        else:
+            print("✅ Discord token found")
+    except Exception as e:
+        print(f"❌ Error checking token: {e}")
+        input("Press Enter to exit...")
+        exit(1)
+    
+    # TRY TO START THE BOT WITH FULL ERROR HANDLING
+    print("🚀 Starting Discord bot...")
+    try:
         bot.run(token)
+    except discord.LoginFailure:
+        print("❌ INVALID DISCORD TOKEN!")
+        print("Check that your bot token is correct in the .env file")
+        input("Press Enter to exit...")
+    except discord.HTTPException as e:
+        print(f"❌ Discord HTTP Error: {e}")
+        print("This might be a network issue or Discord API problem")
+        input("Press Enter to exit...")
     except KeyboardInterrupt:
         print("🛑 Bot shutdown requested")
+    except Exception as e:
+        print(f"❌ UNEXPECTED ERROR: {e}")
+        print("Full error details:")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
     finally:
-        close_database()
-        print("✅ Cleanup completed")
+        if DATABASE_AVAILABLE:
+            try:
+                close_database()
+                print("✅ Cleanup completed")
+            except:
+                pass
