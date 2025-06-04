@@ -10,19 +10,42 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Thread-local storage for database connections
-_local = threading.local()
+# Database file path
+DB_PATH = Path("storm_kings_thunder.db")
 
 def get_db_connection():
-    """Get thread-local database connection"""
-    if not hasattr(_local, 'connection'):
-        db_path = Path("storm_kings_thunder.db")
-        _local.connection = sqlite3.connect(str(db_path), check_same_thread=False)
-        _local.connection.row_factory = sqlite3.Row  # Enable dict-like access
-    return _local.connection
+    """Get a fresh database connection - FIXED to avoid stale connections"""
+    try:
+        # ✅ FIXED: Always create a fresh connection instead of reusing
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
+        conn.row_factory = sqlite3.Row  # Enable dict-like access
+        
+        # Configure SQLite for better performance and reliability
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")  # Better for concurrent access
+        conn.execute("PRAGMA busy_timeout = 30000")  # 30 second timeout
+        
+        return conn
+    except Exception as e:
+        logger.error(f"❌ Failed to create database connection: {e}")
+        raise
+
+def test_connection():
+    """Test if database connection works - UTILITY FUNCTION"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    except Exception as e:
+        logger.error(f"❌ Database connection test failed: {e}")
+        return False
 
 def init_database():
     """Initialize the database with all required tables"""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -129,21 +152,24 @@ def init_database():
     except Exception as e:
         logger.error(f"❌ Unexpected error during database init: {e}")
         raise
+    finally:
+        # ✅ FIXED: Always close the connection
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 def close_database():
-    """Close the database connection"""
-    if hasattr(_local, 'connection'):
-        try:
-            _local.connection.close()
-            logger.info("🔒 Database connection closed")
-        except Exception as e:
-            logger.error(f"Error closing database: {e}")
-        finally:
-            if hasattr(_local, 'connection'):
-                delattr(_local, 'connection')
+    """Close database connections - Updated for new connection model"""
+    # ✅ FIXED: No more thread-local storage to clean up
+    # Individual connections are closed when operations complete
+    logger.info("🔒 Database cleanup completed")
 
 def backup_database(backup_path: str = None):
     """Create a backup of the database"""
+    conn = None
+    backup_conn = None
     try:
         if backup_path is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -152,16 +178,22 @@ def backup_database(backup_path: str = None):
         conn = get_db_connection()
         backup_conn = sqlite3.connect(backup_path)
         conn.backup(backup_conn)
-        backup_conn.close()
         
         logger.info(f"✅ Database backed up to: {backup_path}")
         return backup_path
     except Exception as e:
         logger.error(f"❌ Backup failed: {e}")
         raise
+    finally:
+        # ✅ FIXED: Clean up connections
+        if backup_conn:
+            backup_conn.close()
+        if conn:
+            conn.close()
 
 def get_database_stats():
     """Get database statistics for monitoring"""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -192,6 +224,10 @@ def get_database_stats():
     except Exception as e:
         logger.error(f"Error getting database stats: {e}")
         return {}
+    finally:
+        # ✅ FIXED: Close connection
+        if conn:
+            conn.close()
 
 # Utility functions for JSON handling
 def serialize_json(data):
@@ -214,10 +250,12 @@ def deserialize_json(json_str):
         logger.error(f"JSON deserialization error: {e}")
         return {}
 
-# Database health check
+# Database health check - COMPLETELY FIXED
 def health_check():
-    """Perform database health check"""
+    """Perform database health check with proper connection management"""
+    conn = None
     try:
+        # ✅ FIXED: Create fresh connection, use it, and close it
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -226,12 +264,189 @@ def health_check():
         result = cursor.fetchone()
         
         if result and result[0] == 1:
-            logger.info("✅ Database health check passed")
+            # Test a real table query
+            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+            table_count = cursor.fetchone()[0]
+            
+            logger.info(f"✅ Database health check passed ({table_count} tables found)")
             return True
         else:
-            logger.error("❌ Database health check failed")
+            logger.error("❌ Database health check failed - unexpected result")
             return False
             
     except Exception as e:
         logger.error(f"❌ Database health check error: {e}")
         return False
+    finally:
+        # ✅ CRITICAL: Always close the connection
+        if conn:
+            try:
+                conn.close()
+            except Exception as close_error:
+                logger.error(f"Error closing health check connection: {close_error}")
+
+# ✅ NEW: Enhanced schema upgrade function for memory system
+def upgrade_database_schema():
+    """Upgrade database schema for enhanced memory system"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        logger.info("🔄 Upgrading database schema for enhanced memory...")
+        
+        # Enhanced memory tables
+        # Conversation memories - Store analyzed player interactions
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS conversation_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                episode_id INTEGER,
+                user_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                player_input TEXT NOT NULL,
+                dm_response TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                importance_score REAL NOT NULL DEFAULT 0.5,
+                entities TEXT,  -- JSON array of detected entities
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE SET NULL
+            )
+        ''')
+        
+        # NPC memories - Track NPCs and their personalities
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS npc_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                personality_summary TEXT,
+                relationships TEXT,  -- JSON object with character relationships
+                current_location TEXT,
+                faction_affiliation TEXT,
+                importance_level TEXT DEFAULT 'minor',
+                first_introduced_episode INTEGER,
+                last_seen_episode INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(campaign_id, name)
+            )
+        ''')
+        
+        # World state - Track locations and faction status
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS world_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                location_name TEXT NOT NULL,
+                state_type TEXT NOT NULL,  -- 'location', 'faction', 'event'
+                current_state TEXT NOT NULL,
+                last_changed_episode INTEGER,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(campaign_id, location_name, state_type)
+            )
+        ''')
+        
+        # Plot threads - Track ongoing story elements
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS plot_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                thread_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                status TEXT DEFAULT 'active',  -- 'active', 'resolved', 'abandoned'
+                importance TEXT DEFAULT 'medium',  -- 'low', 'medium', 'high', 'critical'
+                introduced_episode INTEGER,
+                resolved_episode INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Memory consolidation - Episode summaries and compressed memories
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memory_consolidation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                episode_id INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                key_events TEXT,  -- JSON array of key events
+                character_developments TEXT,  -- JSON object with character changes
+                npc_interactions TEXT,  -- JSON array of significant NPC interactions
+                plot_progression TEXT,  -- JSON object with plot thread updates
+                world_changes TEXT,  -- JSON object with world state changes
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE,
+                UNIQUE(campaign_id, episode_id)
+            )
+        ''')
+        
+        # Campaign constants - Store campaign-specific data
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS campaign_constants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setting_name TEXT NOT NULL,
+                constant_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                data TEXT,  -- JSON data
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(setting_name, constant_type, name)
+            )
+        ''')
+        
+        # Create indexes for memory system performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversation_campaign ON conversation_memories(campaign_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversation_episode ON conversation_memories(episode_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversation_importance ON conversation_memories(importance_score)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversation_timestamp ON conversation_memories(timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_npc_campaign ON npc_memories(campaign_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_world_campaign ON world_state(campaign_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_plot_campaign ON plot_threads(campaign_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_plot_status ON plot_threads(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_consolidation_campaign ON memory_consolidation(campaign_id)')
+        
+        # Insert Storm King's Thunder constants
+        cursor.execute('''
+            INSERT OR IGNORE INTO campaign_constants 
+            (setting_name, constant_type, name, description, data) 
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            "Storm King's Thunder",
+            "campaign_setting",
+            "main_setting",
+            "Core campaign information for Storm King's Thunder",
+            serialize_json({
+                "ordning_collapsed": True,
+                "giant_types": ["cloud", "storm", "fire", "frost", "stone", "hill"],
+                "main_locations": ["Nightstone", "Triboar", "Bryn Shander", "Waterdeep"],
+                "key_npcs": ["Zephyros", "Harshnag", "Duke Zalto", "Princess Serissa"]
+            })
+        ))
+        
+        conn.commit()
+        
+        # Verify new tables
+        new_tables = [
+            'conversation_memories', 'npc_memories', 'world_state', 
+            'plot_threads', 'memory_consolidation', 'campaign_constants'
+        ]
+        
+        for table in new_tables:
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
+            if cursor.fetchone():
+                logger.info(f"✅ Table {table}: created")
+            else:
+                logger.error(f"❌ Table {table}: failed to create")
+        
+        logger.info("✅ Enhanced memory schema upgrade completed successfully")
+        
+    except Exception as e:
+        logger.error(f"❌ Schema upgrade failed: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()

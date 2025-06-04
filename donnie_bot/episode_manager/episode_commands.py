@@ -1,6 +1,3 @@
-# episode_manager/episode_commands.py
-# UPDATE: Replace your existing episode_commands.py with this enhanced version WITH STATE SYNC FIXES
-
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -38,21 +35,24 @@ except ImportError:
         @staticmethod
         def update_guild_settings(*args, **kwargs): return False
 
-# Import sync function from main - STATE SYNC FIX
+# ❌ REMOVED ALL IMPORTS FROM MAIN.PY - These will be passed as parameters instead!
+
+# Import Enhanced DM System for memory consolidation - NEW!
 try:
-    from main import sync_campaign_context_with_database
-    MAIN_SYNC_AVAILABLE = True
+    from enhanced_dm_system import PersistentDMSystem
+    PERSISTENT_MEMORY_AVAILABLE = True
+    print("✅ Enhanced DM system available for memory consolidation")
 except ImportError:
-    MAIN_SYNC_AVAILABLE = False
-    def sync_campaign_context_with_database(guild_id): 
-        print(f"⚠️ Sync function not available for guild {guild_id}")
+    PERSISTENT_MEMORY_AVAILABLE = False
+    print("⚠️ Enhanced DM system not available - memory consolidation disabled")
 
 class EpisodeCommands:
-    """Enhanced Episode Management with Database Integration and State Sync"""
+    """Enhanced Episode Management with Database Integration, State Sync, and Memory Consolidation"""
     
     def __init__(self, bot: commands.Bot, campaign_context: Dict, voice_clients: Dict,
                  tts_enabled: Dict, add_to_voice_queue_func: Callable,
-                 episode_operations=None, character_operations=None, guild_operations=None):
+                 episode_operations=None, character_operations=None, guild_operations=None,
+                 claude_client=None, sync_function=None):  # ✅ FIXED: Added new parameters
         self.bot = bot
         self.campaign_context = campaign_context
         self.voice_clients = voice_clients
@@ -64,11 +64,17 @@ class EpisodeCommands:
         self.character_ops = character_operations or CharacterOperations
         self.guild_ops = guild_operations or GuildOperations
         
+        # ✅ FIXED: Store passed parameters instead of importing
+        self.claude_client = claude_client
+        self.sync_function = sync_function
+        
         # Register commands
         self._register_commands()
         
         print(f"✅ Episode Commands initialized (Database: {'✅' if DATABASE_AVAILABLE else '❌'})")
-        print(f"🔄 State Sync: {'✅' if MAIN_SYNC_AVAILABLE else '❌'}")
+        print(f"🔄 State Sync: {'✅' if self.sync_function else '❌'}")
+        print(f"🧠 Memory Consolidation: {'✅' if PERSISTENT_MEMORY_AVAILABLE else '❌'})")
+        print(f"🤖 Claude Client: {'✅' if self.claude_client else '❌'}")
     
     def _register_commands(self):
         """Register all episode-related commands"""
@@ -83,7 +89,7 @@ class EpisodeCommands:
                               recap_previous: bool = True):
             await self._start_episode_command(interaction, episode_name, recap_previous)
         
-        @self.bot.tree.command(name="end_episode", description="End the current episode with summary and character snapshots")
+        @self.bot.tree.command(name="end_episode", description="End the current episode with summary, character snapshots, and memory consolidation")
         @app_commands.describe(summary="Optional summary of what happened this episode")
         async def end_episode(interaction: discord.Interaction, summary: Optional[str] = None):
             await self._end_episode_command(interaction, summary)
@@ -214,7 +220,7 @@ class EpisodeCommands:
         # Create response embed
         embed = discord.Embed(
             title=f"🎬 {episode_name}",
-            description="**Episode begins!** The adventure continues in the Storm King's Thunder campaign.",
+            description="**Episode begins!** The adventure continues in the Storm King's Thunder campaign with enhanced memory.",
             color=0x4169E1
         )
         
@@ -242,11 +248,22 @@ class EpisodeCommands:
             inline=False
         )
         
-        # Add database status
+        # Add enhanced features
+        features = []
         if DATABASE_AVAILABLE:
+            features.append("✅ Character snapshots saved")
+            features.append("✅ Progress will be tracked")
+            features.append("✅ Recaps available anytime")
+        
+        if PERSISTENT_MEMORY_AVAILABLE:
+            features.append("✅ Enhanced memory active")
+            features.append("✅ NPCs will be remembered")
+            features.append("✅ Past events referenced")
+        
+        if features:
             embed.add_field(
-                name="💾 Episode Tracking",
-                value="✅ Character snapshots saved\n✅ Progress will be tracked\n✅ Recaps available anytime",
+                name="💾 Enhanced Features",
+                value="\n".join(features),
                 inline=False
             )
         
@@ -260,18 +277,18 @@ class EpisodeCommands:
                            self.tts_enabled.get(interaction.guild.id, False))
         
         if voice_will_speak:
-            announcement = f"Welcome, brave adventurers, to {episode_name}! Your journey through the Storm King's Thunder campaign continues. The giants still threaten the Sword Coast, and heroes are needed now more than ever. What will you do first?"
+            announcement = f"Welcome, brave adventurers, to {episode_name}! Your journey through the Storm King's Thunder campaign continues with enhanced memory. The giants still threaten the Sword Coast, and heroes are needed now more than ever. What will you do first?"
             await self.add_to_voice_queue(interaction.guild.id, announcement, "Episode Start")
         
-        # ✅ CRITICAL: SYNC STATE AFTER EPISODE CREATION
-        if MAIN_SYNC_AVAILABLE:
-            sync_campaign_context_with_database(guild_id)
+        # ✅ FIXED: Use passed sync function instead of importing
+        if self.sync_function:
+            self.sync_function(guild_id)
             print(f"🔄 Episode {episode_number} started and state synced")
         else:
             print(f"⚠️ Could not sync state after episode start - sync function unavailable")
     
     async def _end_episode_command(self, interaction: discord.Interaction, summary: Optional[str]):
-        """End the current episode with database integration and STATE SYNC"""
+        """End the current episode with database integration, STATE SYNC, and MEMORY CONSOLIDATION"""
         guild_id = str(interaction.guild.id)
         
         # Check if episode is active
@@ -304,6 +321,40 @@ class EpisodeCommands:
         # Generate summary if not provided
         if not summary:
             summary = f"The heroes continue their quest in the Storm King's Thunder campaign. Episode {episode_number} concludes with new challenges ahead."
+        
+        # Send initial response
+        embed = discord.Embed(
+            title="🔄 Ending Episode...",
+            description="Donnie is consolidating memories and saving progress...",
+            color=0xFFD700
+        )
+        await interaction.response.send_message(embed=embed)
+        
+        # ✅ FIXED: MEMORY CONSOLIDATION - Use passed claude_client instead of importing
+        memory_consolidation_result = None
+        if DATABASE_AVAILABLE and current_episode and PERSISTENT_MEMORY_AVAILABLE and self.claude_client:
+            try:
+                print(f"🧠 Consolidating memories for episode {episode_number}")
+                
+                # Use passed claude_client instead of importing from main
+                dm_system = PersistentDMSystem(self.claude_client, self.campaign_context)
+                memory_consolidation_result = await dm_system.end_episode_consolidation(
+                    guild_id, current_episode.id
+                )
+                
+                if memory_consolidation_result:
+                    print(f"✅ Episode {episode_number} memories consolidated:")
+                    print(f"   Key events: {len(memory_consolidation_result.get('key_events', []))}")
+                    print(f"   NPCs: {len(memory_consolidation_result.get('npc_interactions', []))}")
+                    print(f"   Plot threads: {len(memory_consolidation_result.get('new_plot_threads', []))}")
+                    print(f"   Character developments: {len(memory_consolidation_result.get('character_developments', []))}")
+                else:
+                    print(f"⚠️ No memories found to consolidate for episode {episode_number}")
+                    
+            except Exception as e:
+                print(f"⚠️ Memory consolidation failed for episode {episode_number}: {e}")
+                import traceback
+                traceback.print_exc()
         
         # End episode in database
         if DATABASE_AVAILABLE and current_episode:
@@ -343,10 +394,10 @@ class EpisodeCommands:
         self.campaign_context["episode_start_time"] = None
         self.campaign_context["session_started"] = False  # Clear session_started too
         
-        # Create response
+        # Create final response embed
         embed = discord.Embed(
             title=f"🎬 Episode {episode_number} Complete!",
-            description="**Episode concluded!** Your adventure progress has been saved.",
+            description="**Episode concluded!** Your adventure progress has been saved with enhanced memory consolidation.",
             color=0x32CD32
         )
         
@@ -356,22 +407,73 @@ class EpisodeCommands:
             inline=False
         )
         
+        # Add memory consolidation results if available
+        if memory_consolidation_result:
+            memory_summary = []
+            
+            key_events = memory_consolidation_result.get('key_events', [])
+            if key_events:
+                memory_summary.append(f"🎯 **{len(key_events)} key events** preserved")
+            
+            npc_interactions = memory_consolidation_result.get('npc_interactions', [])
+            if npc_interactions:
+                memory_summary.append(f"👥 **{len(npc_interactions)} NPCs** tracked")
+            
+            new_plot_threads = memory_consolidation_result.get('new_plot_threads', [])
+            if new_plot_threads:
+                memory_summary.append(f"📚 **{len(new_plot_threads)} plot threads** identified")
+            
+            character_developments = memory_consolidation_result.get('character_developments', [])
+            if character_developments:
+                memory_summary.append(f"⭐ **{len(character_developments)} character developments** noted")
+            
+            if memory_summary:
+                embed.add_field(
+                    name="🧠 Memory Consolidation",
+                    value="\n".join(memory_summary),
+                    inline=False
+                )
+                
+                # Add a sample of key events if available
+                if key_events:
+                    sample_events = key_events[:2]  # Show first 2 events
+                    events_text = "\n".join([f"• {event}" for event in sample_events])
+                    if len(key_events) > 2:
+                        events_text += f"\n• ...and {len(key_events) - 2} more events"
+                    
+                    embed.add_field(
+                        name="🎯 Key Events Remembered",
+                        value=events_text,
+                        inline=False
+                    )
+        
         if DATABASE_AVAILABLE:
+            database_features = [
+                "✅ Character snapshots created",
+                "✅ Episode summary recorded", 
+                "✅ Session history preserved"
+            ]
+            
+            if memory_consolidation_result:
+                database_features.append("✅ Memories consolidated for future episodes")
+            
             embed.add_field(
                 name="💾 Progress Saved",
-                value="✅ Character snapshots created\n✅ Episode summary recorded\n✅ Session history preserved",
+                value="\n".join(database_features),
                 inline=False
             )
         
         embed.add_field(
             name="🎉 Next Steps",
-            value="Use `/episode_recap` for a dramatic retelling!\nStart the next episode with `/start_episode`",
+            value="Use `/episode_recap` for a dramatic retelling!\nStart the next episode with `/start_episode` - Donnie will remember everything!",
             inline=False
         )
         
         embed.set_footer(text=f"Episode ended • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         
-        await interaction.response.send_message(embed=embed)
+        # Update the original message
+        original_message = await interaction.original_response()
+        await original_message.edit(embed=embed)
         
         # Voice announcement
         voice_will_speak = (interaction.guild.id in self.voice_clients and 
@@ -379,12 +481,16 @@ class EpisodeCommands:
                            self.tts_enabled.get(interaction.guild.id, False))
         
         if voice_will_speak:
-            announcement = f"And so concludes Episode {episode_number} of your Storm King's Thunder adventure! The heroes have faced new challenges and grown stronger. What legends will the next episode bring?"
+            consolidation_note = ""
+            if memory_consolidation_result:
+                consolidation_note = " Your memories have been preserved for future adventures."
+            
+            announcement = f"And so concludes Episode {episode_number} of your Storm King's Thunder adventure! The heroes have faced new challenges and grown stronger.{consolidation_note} What legends will the next episode bring?"
             await self.add_to_voice_queue(interaction.guild.id, announcement, "Episode End")
         
-        # ✅ CRITICAL: SYNC STATE AFTER EPISODE END
-        if MAIN_SYNC_AVAILABLE:
-            sync_campaign_context_with_database(guild_id)
+        # ✅ FIXED: Use passed sync function instead of importing
+        if self.sync_function:
+            self.sync_function(guild_id)
             print(f"🔄 Episode {episode_number} ended and state synced")
         else:
             print(f"⚠️ Could not sync state after episode end - sync function unavailable")
@@ -440,7 +546,9 @@ class EpisodeCommands:
                 )
             
             if len(episodes) > 5:
-                embed.set_footer(text=f"Showing last 5 of {len(episodes)} episodes")
+                embed.set_footer(text=f"Showing last 5 of {len(episodes)} episodes • Enhanced with persistent memory")
+            else:
+                embed.set_footer(text="Enhanced with persistent memory")
             
             await interaction.response.send_message(embed=embed)
             
@@ -456,9 +564,9 @@ class EpisodeCommands:
         """Show current episode status with STATE SYNC CHECK"""
         guild_id = str(interaction.guild.id)
         
-        # ✅ FORCE SYNC BEFORE SHOWING STATUS
-        if MAIN_SYNC_AVAILABLE:
-            sync_campaign_context_with_database(guild_id)
+        # ✅ FIXED: Use passed sync function instead of importing
+        if self.sync_function:
+            self.sync_function(guild_id)
         
         embed = discord.Embed(
             title="📺 Episode Status",
@@ -488,6 +596,21 @@ class EpisodeCommands:
                         inline=True
                     )
                     
+                    # Enhanced features status
+                    features_status = []
+                    if DATABASE_AVAILABLE:
+                        features_status.append("✅ Database tracking")
+                    if PERSISTENT_MEMORY_AVAILABLE:
+                        features_status.append("✅ Enhanced memory")
+                    else:
+                        features_status.append("⚠️ Basic memory only")
+                    
+                    embed.add_field(
+                        name="🧠 Enhanced Features",
+                        value="\n".join(features_status),
+                        inline=True
+                    )
+                    
                     # State sync verification
                     memory_active = self.campaign_context.get("episode_active", False)
                     memory_started = self.campaign_context.get("session_started", False)
@@ -496,13 +619,13 @@ class EpisodeCommands:
                     embed.add_field(
                         name="🔄 State Sync",
                         value=f"Memory/DB: {sync_status}\nEpisode Active: {memory_active}\nSession Started: {memory_started}",
-                        inline=True
+                        inline=False
                     )
                 else:
                     embed.description = "No episode is currently active."
                     embed.add_field(
                         name="🎬 Start New Episode",
-                        value="Use `/start_episode` to begin your next adventure!",
+                        value="Use `/start_episode` to begin your next adventure with enhanced memory!",
                         inline=False
                     )
                     
@@ -513,7 +636,7 @@ class EpisodeCommands:
                     if memory_active or memory_started:
                         embed.add_field(
                             name="⚠️ State Warning",
-                            value=f"Memory shows active ({memory_active}/{memory_started}) but DB shows none. Use `/debug_state` for details.",
+                            value=f"Memory shows active ({memory_active}/{memory_started}) but DB shows none. Use `/debug_memory` for details.",
                             inline=False
                         )
             except Exception as e:

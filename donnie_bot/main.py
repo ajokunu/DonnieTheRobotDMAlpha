@@ -80,6 +80,15 @@ except ImportError as e:
     print(f"⚠️ Enhanced audio system not available: {e}")
     ENHANCED_AUDIO_AVAILABLE = False
 
+# Enhanced DM system imports - NEW PERSISTENT MEMORY SYSTEM!
+try:
+    from enhanced_dm_system import get_persistent_dm_response, PersistentDMSystem
+    print("✅ Enhanced DM system with persistent memory imported successfully")
+    PERSISTENT_MEMORY_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Enhanced DM system with persistent memory not available: {e}")
+    PERSISTENT_MEMORY_AVAILABLE = False
+
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
@@ -187,6 +196,37 @@ class ContinueView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+def sync_campaign_context_with_database(guild_id: str):
+    """Sync in-memory campaign context with database state"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        # Get current episode from database
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode:
+            campaign_context["current_episode"] = current_episode.episode_number
+            campaign_context["episode_active"] = True
+            campaign_context["episode_start_time"] = current_episode.start_time
+            campaign_context["guild_id"] = guild_id
+            
+            # Load session history from database
+            if current_episode.session_history:
+                campaign_context["session_history"] = current_episode.session_history
+            
+            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
+        
+        # Get guild settings
+        guild_settings = GuildOperations.get_guild_settings(guild_id)
+        if guild_settings:
+            # Sync voice settings with database
+            voice_speed[guild_id] = guild_settings.get('voice_speed', 1.25)
+            tts_enabled[guild_id] = guild_settings.get('tts_enabled', False)
+            
+            print(f"✅ Synced guild settings for {guild_id}")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to sync campaign context: {e}")
 # Continue Action Processor
 async def process_continue_action(interaction: discord.Interaction, user_id: str):
     """Process 'continue' action"""
@@ -221,8 +261,9 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
     message = await interaction.followup.send(embed=embed)
     
     # Process in background
-    asyncio.create_task(process_streamlined_dm_response(
-        user_id, "continue", message, character_name, guild_id, voice_will_speak
+    asyncio.create_task(process_enhanced_dm_response_background(
+        user_id, "continue", message, character_name, char_data, 
+        campaign_context["players"][user_id]["player_name"], guild_id, voice_will_speak
     ))
 
 # Simple Combat Detection
@@ -233,6 +274,59 @@ def detect_combat_keywords(player_input: str) -> bool:
         "draw weapon", "strike", "hit", "damage", "combat", "battle"
     ]
     return any(keyword in player_input.lower() for keyword in combat_keywords)
+
+
+# Enhanced DM response with persistent memory - UPGRADED VERSION
+async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
+    """Enhanced DM response with persistent memory - UPGRADED VERSION"""
+    try:
+        print(f"🧠 Enhanced DM response with persistent memory for user {user_id}")
+        
+        # Get guild ID for campaign identification
+        guild_id = campaign_context.get("guild_id", "storm_kings_thunder_default")
+        
+        # Get current episode ID
+        episode_id = None
+        if DATABASE_AVAILABLE:
+            try:
+                current_episode = EpisodeOperations.get_current_episode(guild_id)
+                if current_episode:
+                    episode_id = current_episode.id
+                    print(f"📺 Using episode {current_episode.episode_number} (ID: {episode_id})")
+                else:
+                    print("⚠️ No active episode found in database")
+            except Exception as e:
+                print(f"Error getting episode ID: {e}")
+        
+        # Fallback episode ID
+        if not episode_id:
+            episode_id = campaign_context.get("current_episode", 1)
+            print(f"📺 Using fallback episode ID: {episode_id}")
+        
+        # Use the new persistent DM system if available
+        if PERSISTENT_MEMORY_AVAILABLE:
+            dm_response = await get_persistent_dm_response(
+                claude_client=claude_client,
+                campaign_context=campaign_context,
+                user_id=user_id,
+                player_input=player_input,
+                guild_id=guild_id,
+                episode_id=episode_id
+            )
+            print("✅ Enhanced memory response generated successfully")
+            return dm_response
+        else:
+            print("⚠️ Persistent memory system not available, falling back to streamlined response")
+            return await get_streamlined_claude_response(user_id, player_input)
+        
+    except Exception as e:
+        print(f"❌ Enhanced memory system error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback to streamlined system
+        print("🔄 Falling back to streamlined DM system")
+        return await get_streamlined_claude_response(user_id, player_input)
 
 # Single, Fast Claude Response
 async def get_streamlined_claude_response(user_id: str, player_input: str) -> str:
@@ -341,18 +435,39 @@ async def get_streamlined_claude_response(user_id: str, player_input: str) -> st
         print(f"❌ Streamlined Claude error: {e}")
         return f"Donnie pauses momentarily... (Error: {str(e)[:50]})"
 
-# Streamlined Background Processor
-async def process_streamlined_dm_response(user_id: str, player_input: str, message, 
-                                        character_name: str, guild_id: int, voice_will_speak: bool):
-    """Fast background processing with continue button"""
+def create_tts_version_with_continuation(dm_response: str) -> tuple[str, str]:
+    """Create TTS-optimized version and extract continuation text"""
+    # Clean for TTS
+    tts_text = dm_response.replace("**", "").replace("*", "")
+    
+    # For now, no continuation splitting - return full response
+    continuation_text = ""
+    
+    return tts_text, continuation_text
+
+async def send_continuation_if_needed(message, dm_response: str, tts_text: str, continuation_text: str, guild_id: int, character_name: str):
+    """Send continuation if needed - placeholder for future implementation"""
+    # For now, this is a placeholder since we're not implementing continuation splitting
+    pass
+
+# Enhanced Background Processor with Memory Integration
+async def process_enhanced_dm_response_background(user_id: str, player_input: str, message, 
+                                                character_name: str, char_data: dict, 
+                                                player_name: str, guild_id: int, voice_will_speak: bool):
+    """Process DM response with enhanced memory and automatic continuation support"""
     try:
-        # Get DM response
-        dm_response = await get_streamlined_claude_response(user_id, player_input)
+        # Use enhanced DM response with persistent memory
+        dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
         
-        # Update embed with response
+        # Get TTS version and continuation
+        tts_text, continuation_text = create_tts_version_with_continuation(dm_response)
+        
+        # Update the message with the actual response (show full response in text)
         embed = message.embeds[0]
+        
+        # Update DM response field with FULL response
         for i, field in enumerate(embed.fields):
-            if field.name == "🐉 Donnie the DM" or "Donnie" in field.name:
+            if field.name == "🐉 Donnie the DM":
                 embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
                 break
         
@@ -362,11 +477,46 @@ async def process_streamlined_dm_response(user_id: str, player_input: str, messa
         # Update message with response and continue button
         await message.edit(embed=embed, view=view)
         
-        # Add to voice queue if enabled
+        # Add to voice queue if voice is enabled (use TTS-optimized version for speed)
         if voice_will_speak:
-            # Optimize text for TTS
-            tts_text = dm_response.replace("**", "").replace("*", "")
             await add_to_voice_queue(guild_id, tts_text, character_name, message)
+        
+        # Send continuation if needed
+        if continuation_text:
+            await send_continuation_if_needed(
+                message, dm_response, tts_text, continuation_text, guild_id, character_name
+            )
+            
+    except Exception as e:
+        print(f"Enhanced background processing error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback error handling
+        embed = message.embeds[0]
+        for i, field in enumerate(embed.fields):
+            if field.name == "🐉 Donnie the DM":
+                embed.set_field_at(i, name="🐉 Donnie the DM", 
+                                 value="*Donnie pauses momentarily...*", inline=False)
+                break
+        
+        view = ContinueView(user_id)
+        await message.edit(embed=embed, view=view)
+
+# Streamlined Background Processor
+async def process_streamlined_dm_response(user_id: str, player_input: str, message, 
+                                        character_name: str, guild_id: int, voice_will_speak: bool):
+    """Fast background processing with continue button"""
+    try:
+        # Get character data
+        char_data = campaign_context["players"][user_id]["character_data"]
+        player_name = campaign_context["players"][user_id]["player_name"]
+        
+        # Use the enhanced processing function
+        await process_enhanced_dm_response_background(
+            user_id, player_input, message, character_name, char_data, 
+            player_name, guild_id, voice_will_speak
+        )
             
     except Exception as e:
         print(f"❌ Streamlined processing error: {e}")
@@ -377,7 +527,9 @@ async def process_streamlined_dm_response(user_id: str, player_input: str, messa
                 embed.set_field_at(i, name="🐉 Donnie the DM", 
                                  value="*Donnie pauses momentarily...*", inline=False)
                 break
-        await message.edit(embed=embed)
+        
+        view = ContinueView(user_id)
+        await message.edit(embed=embed, view=view)
 
 async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
     """Generate TTS audio using OpenAI's API - optimized for speed"""
@@ -658,6 +810,7 @@ async def on_ready():
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
     print(f'⚡ STREAMLINED Combat System loaded!')
+    print(f'🧠 Enhanced Memory System: {"✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"}')
     
     # Initialize database with enhanced error handling
     if DATABASE_AVAILABLE:
@@ -699,6 +852,7 @@ async def on_ready():
             "Episodes": "✅" if episode_commands else "❌", 
             "Progression": "✅" if character_progression else "❌",
             "Enhanced Voice": "✅" if enhanced_voice_manager else "❌",
+            "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
             "Streamlined Combat": "✅",
             "Continue Buttons": "✅",
             "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌"
@@ -832,6 +986,13 @@ async def join_voice_channel(interaction: discord.Interaction):
             inline=False
         )
         
+        if PERSISTENT_MEMORY_AVAILABLE:
+            embed.add_field(
+                name="🧠 Enhanced Memory Active",
+                value="Donnie will remember conversations, NPCs, and plot threads across episodes!",
+                inline=False
+            )
+        
         embed.add_field(
             name="🔧 Controls",
             value="`/mute_donnie` - Disable TTS\n`/unmute_donnie` - Enable TTS\n`/leave_voice` - Donnie leaves voice\n`/donnie_speed` - Adjust speaking speed",
@@ -841,7 +1002,11 @@ async def join_voice_channel(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
         
         # Welcome message in voice
-        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign with streamlined combat and continue buttons for faster gameplay. Just describe what you want to do, and let the adventure unfold!"
+        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign with streamlined combat and continue buttons for faster gameplay."
+        if PERSISTENT_MEMORY_AVAILABLE:
+            welcome_text += " I'll also remember your adventures across episodes!"
+        welcome_text += " Just describe what you want to do, and let the adventure unfold!"
+        
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
         
     except Exception as e:
@@ -1107,6 +1272,13 @@ PERSONALITY: {character_profile['personality']}
         inline=False
     )
     
+    if PERSISTENT_MEMORY_AVAILABLE:
+        embed.add_field(
+            name="🧠 Memory System",
+            value="Donnie will remember your character across episodes and sessions!",
+            inline=False
+        )
+    
     embed.set_footer(text="Character bound to your Discord account and ready for streamlined combat!")
     await interaction.response.send_message(embed=embed)
 
@@ -1361,6 +1533,13 @@ async def start_adventure(interaction: discord.Interaction):
         inline=False
     )
     
+    if PERSISTENT_MEMORY_AVAILABLE:
+        embed.add_field(
+            name="🧠 Enhanced Memory",
+            value="Donnie will remember your actions, NPCs you meet, and plot developments across sessions!",
+            inline=False
+        )
+    
     embed.add_field(
         name="🆕 Episode Management Available",
         value="Use `/start_episode` for full campaign management with episode recaps, character progression tracking, and persistent story memory!",
@@ -1431,15 +1610,17 @@ async def take_action_streamlined(interaction: discord.Interaction, what_you_do:
     footer_text = f"Level {char_data['level']} • {char_data['background']}"
     if combat_state["active"]:
         footer_text += f" • ⚔️ Round {combat_state['round']}"
+    if PERSISTENT_MEMORY_AVAILABLE:
+        footer_text += " • 🧠 Memory Active"
     embed.set_footer(text=footer_text)
     
     # Send immediate response
     await interaction.response.send_message(embed=embed)
     message = await interaction.original_response()
     
-    # Process in background
-    asyncio.create_task(process_streamlined_dm_response(
-        user_id, what_you_do, message, character_name, guild_id, voice_will_speak
+    # Process in background using enhanced system
+    asyncio.create_task(process_enhanced_dm_response_background(
+        user_id, what_you_do, message, character_name, char_data, player_name, guild_id, voice_will_speak
     ))
 
 @bot.tree.command(name="roll", description="Roll dice for your Storm King's Thunder adventure")
@@ -1564,6 +1745,14 @@ async def show_status(interaction: discord.Interaction):
     embed.add_field(
         name="⚡ Streamlined Combat",
         value=combat_status,
+        inline=True
+    )
+    
+    # Memory status
+    memory_status = "🧠 Enhanced Memory: " + ("✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled")
+    embed.add_field(
+        name="🧠 Memory System",
+        value=memory_status,
         inline=True
     )
     
@@ -1838,15 +2027,146 @@ async def cleanup_confirmations(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ Error during cleanup: {str(e)}", ephemeral=True)
 
+# ====== MEMORY DEBUG COMMAND ======
+
+@bot.tree.command(name="debug_memory", description="Check memory system status (Admin only)")
+async def debug_memory(interaction: discord.Interaction):
+    """Debug command to verify memory system functionality"""
+    
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    guild_id = str(interaction.guild.id)
+    
+    try:
+        embed = discord.Embed(
+            title="🧠 Enhanced Memory System Status",
+            description="Current memory system statistics and recent important events",
+            color=0x4169E1
+        )
+        
+        if not PERSISTENT_MEMORY_AVAILABLE:
+            embed.add_field(
+                name="❌ Memory System Status",
+                value="Persistent memory system is not available. Install enhanced_dm_system.py to enable.",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        if not DATABASE_AVAILABLE:
+            embed.add_field(
+                name="⚠️ Database Status",
+                value="Database system is not available. Memory system requires database support.",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Get database connection and check memory tables
+        from database.database import get_db_connection
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Memory statistics
+        try:
+            cursor.execute("SELECT COUNT(*) FROM conversation_memories WHERE campaign_id = ?", (guild_id,))
+            conv_count = cursor.fetchone()[0]
+        except:
+            conv_count = 0
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM npc_memories WHERE campaign_id = ?", (guild_id,))
+            npc_count = cursor.fetchone()[0]
+        except:
+            npc_count = 0
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM memory_consolidation WHERE campaign_id = ?", (guild_id,))
+            consolidation_count = cursor.fetchone()[0]
+        except:
+            consolidation_count = 0
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM world_state WHERE campaign_id = ?", (guild_id,))
+            world_state_count = cursor.fetchone()[0]
+        except:
+            world_state_count = 0
+        
+        embed.add_field(
+            name="📊 Memory Statistics",
+            value=f"**Conversations:** {conv_count}\n**NPCs Tracked:** {npc_count}\n**Episodes Consolidated:** {consolidation_count}\n**World States:** {world_state_count}",
+            inline=True
+        )
+        
+        # Recent important memories
+        try:
+            cursor.execute('''
+                SELECT character_name, summary, importance_score, timestamp 
+                FROM conversation_memories 
+                WHERE campaign_id = ? AND importance_score >= 0.6
+                ORDER BY timestamp DESC LIMIT 5
+            ''', (guild_id,))
+            important_memories = cursor.fetchall()
+        except:
+            important_memories = []
+        
+        if important_memories:
+            memory_text = []
+            for mem in important_memories:
+                timestamp = mem[3][:10] if mem[3] else "Unknown"
+                memory_text.append(f"**{mem[0]}** ({timestamp}): {mem[1][:60]}... (Score: {mem[2]:.1f})")
+            
+            embed.add_field(
+                name="⭐ Recent Important Events",
+                value="\n".join(memory_text[:3]),  # Show top 3
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="⭐ Recent Important Events", 
+                value="No high-importance events recorded yet",
+                inline=False
+            )
+        
+        # System status
+        status_indicators = []
+        status_indicators.append("✅ Database Connected" if DATABASE_AVAILABLE else "❌ Database Unavailable")
+        status_indicators.append("✅ Memory Operations Active" if conv_count > 0 else "⚠️ No Memories Stored")
+        status_indicators.append("✅ Episode Active" if campaign_context.get("episode_active") else "⚠️ No Active Episode")
+        status_indicators.append("✅ Persistent Memory Available" if PERSISTENT_MEMORY_AVAILABLE else "❌ Memory System Disabled")
+        
+        embed.add_field(
+            name="🔍 System Status",
+            value="\n".join(status_indicators),
+            inline=False
+        )
+        
+        embed.set_footer(text="Enhanced Memory System | Storm King's Thunder")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Memory debug failed: {e}", ephemeral=True)
+        print(f"Memory debug error: {e}")
+
 # ====== HELP COMMAND ======
 
 @bot.tree.command(name="help", description="Show comprehensive guide for the Storm King's Thunder TTS bot")
 async def show_help(interaction: discord.Interaction):
     """Show comprehensive bot guide including TTS features, episode management, streamlined combat, and PDF uploads"""
     embed = discord.Embed(
-        title="⚡ Storm King's Thunder TTS Bot - STREAMLINED EDITION",
-        description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice, episode management, and streamlined combat with Continue buttons!",
+        title="⚡ Storm King's Thunder TTS Bot - ENHANCED MEMORY EDITION",
+        description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice, persistent memory, episode management, and streamlined combat with Continue buttons!",
         color=0x4169E1
+    )
+    
+    embed.add_field(
+        name="🧠 Enhanced Memory System (NEW!)",
+        value=f"{'✅ **ACTIVE** - Donnie remembers conversations, NPCs, and plot threads across episodes!' if PERSISTENT_MEMORY_AVAILABLE else '❌ **DISABLED** - Install enhanced_dm_system.py to enable persistent memory'}\n`/debug_memory` - Check memory system status (Admin)",
+        inline=False
     )
     
     embed.add_field(
@@ -1899,17 +2219,17 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="⚙️ Admin Commands",
-        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter",
+        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter\n`/debug_memory` - Check memory system status",
         inline=False
     )
     
     embed.add_field(
-        name="🌟 STREAMLINED Features Highlights",
-        value="• **Continue Buttons**: Anyone can advance the story for faster gameplay\n• **Under 700 Characters**: All responses optimized for speed\n• **Simple Combat**: Essential tracking only, no complex AI\n• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Episode System**: Persistent memory with dramatic recaps\n• **Character Progression**: Level tracking across episodes\n• **Voice Integration**: All features work with Donnie's voice narration\n• **FAST Experience**: Streamlined for maximum gameplay speed!",
+        name="🌟 ENHANCED Memory Features Highlights",
+        value="• **🧠 Persistent Memory**: Donnie remembers across episodes and sessions\n• **👥 NPC Tracking**: Consistent personalities and relationships\n• **📊 Plot Threads**: Ongoing story elements tracked automatically\n• **🗺️ World State**: Location and faction changes persist\n• **🎬 Episode Consolidation**: Intelligent summaries of campaign progress\n• **Continue Buttons**: Anyone can advance the story for faster gameplay\n• **Under 700 Characters**: All responses optimized for speed\n• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Voice Integration**: All features work with Donnie's voice narration\n• **SMART Experience**: Persistent memory with streamlined gameplay speed!",
         inline=False
     )
     
-    embed.set_footer(text="Donnie the DM awaits to guide your FAST, streamlined, voice-enabled campaign adventure!")
+    embed.set_footer(text="Donnie the DM awaits to guide your SMART, memory-enhanced, voice-enabled campaign adventure!")
     await interaction.response.send_message(embed=embed)
 
 # ====== ENHANCED SYSTEM INITIALIZATION ======
@@ -1926,9 +2246,11 @@ if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
             voice_clients=voice_clients,
             tts_enabled=tts_enabled,
             add_to_voice_queue_func=add_to_voice_queue,
-            episode_operations=EpisodeOperations,  # Pass the operations class
-            character_operations=CharacterOperations,  # Pass the operations class
-            guild_operations=GuildOperations  # Pass the operations class
+            episode_operations=EpisodeOperations,
+            character_operations=CharacterOperations,
+            guild_operations=GuildOperations,
+            claude_client=claude_client,  # ✅ NEW: Pass claude_client to avoid circular import
+            sync_function=sync_campaign_context_with_database  # ✅ NEW: Pass sync function to avoid circular import
         )
         print("✅ Episode management system initialized with database support")
     except Exception as e:
@@ -1936,11 +2258,6 @@ if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
         import traceback
         traceback.print_exc()
         episode_commands = None
-else:
-    if not DATABASE_AVAILABLE:
-        print("⚠️ Episode management disabled: Database not available")
-    if not EPISODE_MANAGER_AVAILABLE:
-        print("⚠️ Episode management disabled: Episode commands not available")
 
 if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
     try:
@@ -2003,39 +2320,6 @@ except ImportError as e:
 except Exception as e:
     print(f"❌ Error initializing PDF system: {e}")
 
-# ====== DATABASE INTEGRATION FOR CAMPAIGN CONTEXT ======
-
-def sync_campaign_context_with_database(guild_id: str):
-    """Sync in-memory campaign context with database state"""
-    if not DATABASE_AVAILABLE:
-        return
-    
-    try:
-        # Get current episode from database
-        current_episode = EpisodeOperations.get_current_episode(guild_id)
-        if current_episode:
-            campaign_context["current_episode"] = current_episode.episode_number
-            campaign_context["episode_active"] = True
-            campaign_context["episode_start_time"] = current_episode.start_time
-            campaign_context["guild_id"] = guild_id
-            
-            # Load session history from database
-            if current_episode.session_history:
-                campaign_context["session_history"] = current_episode.session_history
-            
-            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
-        
-        # Get guild settings
-        guild_settings = GuildOperations.get_guild_settings(guild_id)
-        if guild_settings:
-            # Sync voice settings with database
-            voice_speed[guild_id] = guild_settings.get('voice_speed', 1.25)
-            tts_enabled[guild_id] = guild_settings.get('tts_enabled', False)
-            
-            print(f"✅ Synced guild settings for {guild_id}")
-            
-    except Exception as e:
-        print(f"⚠️ Failed to sync campaign context: {e}")
 
 # Add helper function to update database when campaign context changes
 def update_database_from_campaign_context(guild_id: str):
@@ -2063,8 +2347,9 @@ def update_database_from_campaign_context(guild_id: str):
     except Exception as e:
         print(f"⚠️ Failed to update database: {e}")
 
-print("🎲 Storm King's Thunder TTS bot with STREAMLINED Combat System ready!")
+print("🎲 Storm King's Thunder TTS bot with ENHANCED MEMORY SYSTEM ready!")
 print("🔗 Database integration: " + ("✅ Active" if DATABASE_AVAILABLE else "❌ Disabled"))
+print("🧠 Persistent memory: " + ("✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"))
 print("📺 Episode management: " + ("✅ Active" if episode_commands else "❌ Disabled"))
 print("📈 Character progression: " + ("✅ Active" if character_progression else "❌ Disabled"))
 print("🎤 Enhanced voice: " + ("✅ Active" if enhanced_voice_manager else "❌ Disabled"))
@@ -2098,6 +2383,15 @@ if __name__ == "__main__":
     except ImportError:
         print("⚠️ PDF processing libraries not found")
         print("Install with: pip install PyPDF2 pymupdf pillow")
+    
+    # Enhanced memory system initialization messages
+    if PERSISTENT_MEMORY_AVAILABLE:
+        print("✅ ENHANCED MEMORY SYSTEM loaded!")
+        print("🧠 Features: Persistent conversations, NPC tracking, plot thread management")
+        print("📊 Donnie will remember everything across episodes and sessions!")
+    else:
+        print("⚠️ Enhanced memory system not available")
+        print("Install enhanced_dm_system.py and memory_operations.py for persistent memory")
     
     # Streamlined combat system initialization messages
     print("✅ STREAMLINED Combat System loaded!")
