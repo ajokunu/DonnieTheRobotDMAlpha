@@ -10,6 +10,7 @@ from typing import Optional
 import aiohttp
 import tempfile
 import io
+import time
 from datetime import datetime
 
 # Combat system imports (simplified)
@@ -17,6 +18,13 @@ import json
 from typing import Dict, List, Tuple, Optional
 
 load_dotenv()
+
+# ⚡ PERFORMANCE CONFIGURATION
+MAX_MEMORIES_FAST = 2  # Limited memory retrieval for speed
+MAX_MEMORIES_FULL = 10  # Full memory retrieval when needed
+BACKGROUND_PROCESSING = True  # Process memories after response sent
+MAX_RESPONSE_LENGTH = 450  # Shorter responses for faster TTS
+RESPONSE_TIMEOUT = 8.0  # Maximum time to wait for Claude response
 
 # ====== FIXED DATABASE AND EPISODE MANAGEMENT IMPORTS ======
 # Database imports - NOW WORKING!
@@ -98,6 +106,8 @@ intents.message_content = True
 intents.voice_states = True  # Required for voice functionality
 
 bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
+
+# Voice quality was moved to top of file with other voice globals
 
 # Voice client storage
 voice_clients = {}
@@ -216,17 +226,39 @@ def sync_campaign_context_with_database(guild_id: str):
             
             print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
         
-        # Get guild settings
+        # Get guild settings including current scene
         guild_settings = GuildOperations.get_guild_settings(guild_id)
         if guild_settings:
-            # Sync voice settings with database
-            voice_speed[guild_id] = guild_settings.get('voice_speed', 1.25)
-            tts_enabled[guild_id] = guild_settings.get('tts_enabled', False)
+            # Convert guild_id to int for voice dictionaries
+            guild_id_int = int(guild_id) if guild_id.isdigit() else None
+            if guild_id_int:
+                # Sync voice settings with database
+                voice_speed[guild_id_int] = guild_settings.get('voice_speed', 1.25)
+                tts_enabled[guild_id_int] = guild_settings.get('tts_enabled', False)
+            
+            # Sync current scene if stored in database
+            if 'current_scene' in guild_settings and guild_settings['current_scene']:
+                campaign_context["current_scene"] = guild_settings['current_scene']
+                print(f"✅ Synced scene from database")
             
             print(f"✅ Synced guild settings for {guild_id}")
+        
+        # If no scene in database, try to get from last completed episode
+        if campaign_context["current_scene"] == "The village of Nightstone sits eerily quiet. Giant-sized boulders litter the village square, and not a soul can be seen moving in the streets. The party approaches the mysteriously open gates...":
+            try:
+                if hasattr(EpisodeOperations, 'get_last_completed_episode'):
+                    last_episode = EpisodeOperations.get_last_completed_episode(guild_id)
+                    if last_episode and hasattr(last_episode, 'ending_scene') and last_episode.ending_scene:
+                        campaign_context["current_scene"] = last_episode.ending_scene
+                        print(f"✅ Loaded scene from last episode: {last_episode.episode_number}")
+                else:
+                    print("⚠️ get_last_completed_episode method not available")
+            except Exception as e:
+                print(f"⚠️ Could not load scene from last episode: {e}")
             
     except Exception as e:
         print(f"⚠️ Failed to sync campaign context: {e}")
+
 # Continue Action Processor
 async def process_continue_action(interaction: discord.Interaction, user_id: str):
     """Process 'continue' action"""
@@ -275,58 +307,400 @@ def detect_combat_keywords(player_input: str) -> bool:
     ]
     return any(keyword in player_input.lower() for keyword in combat_keywords)
 
-
-# Enhanced DM response with persistent memory - UPGRADED VERSION
 async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
-    """Enhanced DM response with persistent memory - UPGRADED VERSION"""
+    """OPTIMIZED Enhanced DM response - Fast response + background memory processing"""
+    response_start_time = time.time()
+    
     try:
-        print(f"🧠 Enhanced DM response with persistent memory for user {user_id}")
+        print(f"🚀 FAST Enhanced DM response for user {user_id} [OPTIMIZED VERSION ACTIVE]")
         
         # Get guild ID for campaign identification
         guild_id = campaign_context.get("guild_id", "storm_kings_thunder_default")
         
-        # Get current episode ID
+        # Get current episode ID quickly
         episode_id = None
         if DATABASE_AVAILABLE:
             try:
                 current_episode = EpisodeOperations.get_current_episode(guild_id)
-                if current_episode:
-                    episode_id = current_episode.id
-                    print(f"📺 Using episode {current_episode.episode_number} (ID: {episode_id})")
-                else:
-                    print("⚠️ No active episode found in database")
+                episode_id = current_episode.id if current_episode else campaign_context.get("current_episode", 1)
             except Exception as e:
-                print(f"Error getting episode ID: {e}")
-        
-        # Fallback episode ID
-        if not episode_id:
-            episode_id = campaign_context.get("current_episode", 1)
-            print(f"📺 Using fallback episode ID: {episode_id}")
-        
-        # Use the new persistent DM system if available
-        if PERSISTENT_MEMORY_AVAILABLE:
-            dm_response = await get_persistent_dm_response(
-                claude_client=claude_client,
-                campaign_context=campaign_context,
-                user_id=user_id,
-                player_input=player_input,
-                guild_id=guild_id,
-                episode_id=episode_id
-            )
-            print("✅ Enhanced memory response generated successfully")
-            return dm_response
+                print(f"Quick episode lookup failed: {e}")
+                episode_id = campaign_context.get("current_episode", 1)
         else:
-            print("⚠️ Persistent memory system not available, falling back to streamlined response")
-            return await get_streamlined_claude_response(user_id, player_input)
+            episode_id = campaign_context.get("current_episode", 1)
+        
+        # ⚡ FAST MEMORY RETRIEVAL: Always try but with aggressive timeouts
+        memory_context = ""
+        if PERSISTENT_MEMORY_AVAILABLE:
+            try:
+                print("⚡ Retrieving memories with fast timeouts...")
+                from enhanced_dm_system import PersistentDMSystem
+                dm_system = PersistentDMSystem(claude_client, campaign_context)
+                
+                # ⚡ OPTIMIZATION: Get only most relevant memories with aggressive timeout
+                recent_memories = await asyncio.wait_for(
+                    dm_system.memory_ops.retrieve_relevant_memories(
+                        guild_id, player_input, max_memories=MAX_MEMORIES_FAST
+                    ),
+                    timeout=2.0  # 2 second timeout for memory retrieval
+                )
+                
+                # Build minimal context
+                if recent_memories:
+                    memory_context = "\n".join([
+                        f"• {mem.summary}" for mem in recent_memories[:2]
+                    ])
+                
+                print(f"⚡ Retrieved {len(recent_memories)} memories in {time.time() - response_start_time:.2f}s")
+                
+            except asyncio.TimeoutError:
+                print("⚠️ Memory retrieval timeout - proceeding with empty context")
+                memory_context = ""
+            except Exception as e:
+                print(f"⚠️ Fast memory retrieval failed: {e}")
+                memory_context = ""
+        else:
+            print("⚠️ Persistent memory not available")
+        
+        # ⚡ FAST: Generate response with minimal context
+        print("⚡ Generating fast response...")
+        
+        # 🎤 Play thinking sound while generating response (if voice enabled)
+        try:
+            # Convert guild_id for voice system (voice_clients uses int keys)
+            guild_id_int = int(guild_id) if guild_id.isdigit() else int(campaign_context.get("guild_id", 0))
+            
+            if (guild_id_int in voice_clients and 
+                voice_clients[guild_id_int].is_connected() and 
+                tts_enabled.get(guild_id_int, False)):
+                
+                # Get character name for thinking sound
+                character_name = campaign_context["players"][user_id]["character_data"]["name"]
+                asyncio.create_task(play_thinking_sound(guild_id_int, character_name))
+                print(f"🎤 Playing thinking sound for {character_name}")
+        except Exception as e:
+            print(f"⚠️ Could not play thinking sound: {e}")
+        
+        dm_response = await get_fast_dm_response_with_memory(
+            user_id, player_input, memory_context
+        )
+        
+        response_time = time.time() - response_start_time
+        print(f"⏱️ Response generated in {response_time:.2f} seconds")
+        
+        # 🔥 BACKGROUND PROCESSING: Store memories AFTER response sent
+        if PERSISTENT_MEMORY_AVAILABLE and BACKGROUND_PROCESSING:
+            print("🔥 Scheduling background memory processing...")
+            asyncio.create_task(process_memories_background(
+                guild_id, episode_id, user_id, player_input, dm_response
+            ))
+        
+        print("✅ FAST Enhanced memory response completed")
+        return dm_response
         
     except Exception as e:
         print(f"❌ Enhanced memory system error: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Fallback to streamlined system
-        print("🔄 Falling back to streamlined DM system")
+        print("🔄 Falling back to streamlined response")
         return await get_streamlined_claude_response(user_id, player_input)
+
+async def get_fast_dm_response_with_memory(user_id: str, player_input: str, memory_context: str):
+    """FAST DM response generation with minimal memory context"""
+    try:
+        # Get character info quickly
+        player_data = campaign_context["players"][user_id]
+        char_data = player_data["character_data"]
+        character_name = char_data["name"]
+        player_name = player_data["player_name"]
+        
+        # Build MINIMAL context for speed
+        characters_text = f"{char_data['name']} (Lvl {char_data['level']} {char_data['race']} {char_data['class']})"
+        
+        # Get last action for context (only 1 for speed)
+        recent_history = ""
+        if campaign_context.get("session_history"):
+            last_interaction = campaign_context["session_history"][-1]
+            recent_history = f"Recent: {last_interaction.get('action', '')[:50]}..."
+        
+        # ⚡ ULTRA-FAST prompt for speed
+        fast_prompt = f"""You are Donnie, DM for Storm King's Thunder D&D 5e.
+
+SETTING: Giants threaten the Sword Coast. Ordning collapsed.
+SCENE: {campaign_context.get("current_scene", "Adventure continues")[:150]}
+PARTY: {characters_text}
+{f"CONTEXT: {memory_context[:100]}" if memory_context else ""}
+{f"PREVIOUS: {recent_history}" if recent_history else ""}
+
+PLAYER: {character_name}: {player_input}
+
+Respond as Donnie (under {MAX_RESPONSE_LENGTH} chars, engaging):"""
+
+        # ⚡ FAST: Single Claude API call with aggressive optimization
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: claude_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=120,  # Reduced for speed
+                    temperature=0.7,  # Slightly more predictable
+                    messages=[{"role": "user", "content": fast_prompt}]
+                )
+            ),
+            timeout=RESPONSE_TIMEOUT
+        )
+        
+        # Get response text
+        if hasattr(response.content[0], 'text'):
+            dm_response = response.content[0].text.strip()
+        else:
+            dm_response = str(response.content[0]).strip()
+        
+        # Ensure response is under limit for fast TTS
+        if len(dm_response) > MAX_RESPONSE_LENGTH:
+            dm_response = dm_response[:MAX_RESPONSE_LENGTH-3] + "..."
+        
+        # ⚡ FAST: Minimal session history update
+        campaign_context["session_history"].append({
+            "player": f"{character_name} ({player_name})",
+            "action": player_input,
+            "dm_response": dm_response,
+            "timestamp": time.time()
+        })
+        
+        # Keep only last 2 entries for speed (was 5)
+        if len(campaign_context["session_history"]) > 2:
+            campaign_context["session_history"] = campaign_context["session_history"][-2:]
+        
+        return dm_response
+        
+    except asyncio.TimeoutError:
+        print("⚠️ Claude response timeout - using fallback")
+        return "Donnie pauses to consider the situation carefully..."
+    except Exception as e:
+        print(f"❌ Fast DM response error: {e}")
+        return "Donnie gathers his thoughts momentarily..."
+
+async def process_memories_background(guild_id: str, episode_id: int, user_id: str, 
+                                    player_input: str, dm_response: str):
+    """🔥 BACKGROUND: Process and store memories WITHOUT blocking the response"""
+    try:
+        print("🔥 Background memory processing started...")
+        
+        # Small delay to ensure response is sent first
+        await asyncio.sleep(0.3)
+        
+        if not PERSISTENT_MEMORY_AVAILABLE:
+            print("⚠️ Background: Persistent memory not available")
+            return
+        
+        from enhanced_dm_system import PersistentDMSystem
+        dm_system = PersistentDMSystem(claude_client, campaign_context)
+        
+        # Get character info
+        player_data = campaign_context["players"][user_id]
+        char_data = player_data["character_data"]
+        character_name = char_data["name"]
+        
+        # 🔥 BACKGROUND: Store conversation memory with extended timeout
+        try:
+            await asyncio.wait_for(
+                dm_system.memory_ops.store_conversation_memory(
+                    campaign_id=guild_id,
+                    episode_id=episode_id,
+                    user_id=user_id,
+                    character_name=character_name,
+                    player_input=player_input,
+                    dm_response=dm_response
+                ),
+                timeout=10.0  # Extended timeout for background processing
+            )
+            print("✅ Background: Conversation memory stored")
+        except asyncio.TimeoutError:
+            print("⚠️ Background: Memory storage timeout (extended to 10s)")
+        except Exception as e:
+            print(f"⚠️ Background: Failed to store conversation memory: {e}")
+        
+        # 🔥 BACKGROUND: Quick NPC processing (check if method exists)
+        try:
+            potential_npcs = extract_npc_names_fast(dm_response + " " + player_input)
+            
+            for npc_name in potential_npcs[:2]:  # Limit to 2 NPCs for speed
+                try:
+                    if hasattr(dm_system.memory_ops, 'update_npc_memory'):
+                        await asyncio.wait_for(
+                            dm_system.memory_ops.update_npc_memory(
+                                campaign_id=guild_id,
+                                npc_name=npc_name,
+                                episode_id=episode_id,
+                                updates={
+                                    "last_interaction": dm_response[:80],
+                                    "last_seen_episode": episode_id
+                                }
+                            ),
+                            timeout=3.0
+                        )
+                        print(f"✅ Background: Updated NPC memory for {npc_name}")
+                    else:
+                        print(f"⚠️ Background: NPC {npc_name} detected but update_npc_memory method not available")
+                except asyncio.TimeoutError:
+                    print(f"⚠️ Background: NPC update timeout for {npc_name}")
+                except Exception as e:
+                    print(f"⚠️ Background: Failed to update NPC {npc_name}: {e}")
+                    
+        except Exception as e:
+            print(f"⚠️ Background: NPC processing failed: {e}")
+        
+        # 🔥 BACKGROUND: Update world state if location mentioned (check if method exists)
+        try:
+            locations = extract_locations_fast(dm_response + " " + player_input)
+            if locations and hasattr(dm_system.memory_ops, 'update_world_state'):
+                current_location = locations[0]  # Take first location mentioned
+                await asyncio.wait_for(
+                    dm_system.memory_ops.update_world_state(
+                        campaign_id=guild_id,
+                        location_name=current_location,
+                        state_type="location",
+                        current_state="visited",
+                        episode_id=episode_id
+                    ),
+                    timeout=3.0
+                )
+                print(f"✅ Background: Updated location {current_location}")
+            elif locations:
+                print(f"⚠️ Background: Location {locations[0]} detected but update_world_state method not available")
+        except Exception as e:
+            print(f"⚠️ Background: Location update failed: {e}")
+        
+        print("✅ Background memory processing completed")
+        
+    except Exception as e:
+        print(f"❌ Background memory processing error: {e}")
+
+def extract_npc_names_fast(text: str) -> list:
+    """FAST NPC name extraction using simple pattern matching"""
+    # Quick and dirty NPC detection for background processing
+    storm_kings_npcs = [
+        "Morak", "Zephyros", "Harshnag", "Serissa", "Zalto", "Imryth",
+        "Felgolos", "Claugiyliamatar", "Klauth", "Iymrith"
+    ]
+    
+    common_npc_types = [
+        "guard", "captain", "merchant", "innkeeper", "villager", "priest",
+        "mayor", "blacksmith", "tavern keeper", "shopkeeper"
+    ]
+    
+    text_lower = text.lower()
+    found_npcs = []
+    
+    # Check for specific Storm King's Thunder NPCs first
+    for npc in storm_kings_npcs:
+        if npc.lower() in text_lower:
+            found_npcs.append(npc)
+    
+    # Check for common NPC types
+    for npc_type in common_npc_types:
+        if npc_type in text_lower and npc_type.title() not in found_npcs:
+            found_npcs.append(npc_type.title())
+    
+    return found_npcs[:3]  # Limit to 3 for speed
+
+def extract_locations_fast(text: str) -> list:
+    """FAST location extraction for world state updates"""
+    storm_kings_locations = [
+        "Nightstone", "Triboar", "Waterdeep", "Neverwinter", "Bryn Shander",
+        "Ironslag", "Maelstrom", "Eye of the All-Father", "Lyn Armaal"
+    ]
+    
+    text_lower = text.lower()
+    found_locations = []
+    
+    for location in storm_kings_locations:
+        if location.lower() in text_lower:
+            found_locations.append(location)
+    
+    return found_locations[:2]  # Limit to 2 for speed
+
+# ⚡ PERFORMANCE MONITORING FUNCTIONS
+
+def log_performance_metrics(start_time: float, operation: str):
+    """Log performance metrics for monitoring"""
+    elapsed = time.time() - start_time
+    
+    if elapsed > 5.0:
+        print(f"🚨 SLOW {operation}: {elapsed:.2f}s")
+    elif elapsed > 3.0:
+        print(f"⚠️ MEDIUM {operation}: {elapsed:.2f}s")
+    else:
+        print(f"✅ FAST {operation}: {elapsed:.2f}s")
+    
+    return elapsed
+
+async def get_performance_optimized_response(user_id: str, player_input: str):
+    """Alternative ultra-fast response for when speed is critical"""
+    start_time = time.time()
+    
+    try:
+        # Get character info
+        player_data = campaign_context["players"][user_id]
+        char_data = player_data["character_data"]
+        character_name = char_data["name"]
+        
+        # Ultra-minimal prompt
+        prompt = f"""Donnie DM responds to {character_name}: {player_input}
+Storm King's Thunder. Keep under 300 chars:"""
+        
+        # Single fast Claude call
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: claude_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=80,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            ),
+            timeout=5.0
+        )
+        
+        dm_response = response.content[0].text.strip()
+        
+        # Log performance
+        elapsed = log_performance_metrics(start_time, "ULTRA-FAST response")
+        
+        return dm_response
+        
+    except Exception as e:
+        print(f"❌ Ultra-fast response failed: {e}")
+        return "Donnie responds quickly to keep the adventure moving!"
+
+async def handle_dm_response_error(message, user_id: str, error_msg: str = "*Donnie pauses momentarily...*"):
+    """Centralized error handling for DM response failures"""
+    try:
+        embed = message.embeds[0]
+        for i, field in enumerate(embed.fields):
+            if field.name == "🐉 Donnie the DM":
+                embed.set_field_at(i, name="🐉 Donnie the DM", value=error_msg, inline=False)
+                break
+        
+        view = ContinueView(user_id)
+        await message.edit(embed=embed, view=view)
+    except Exception as e:
+        print(f"Error in error handler: {e}")
+
+# Configuration helper
+def configure_performance_mode(fast_mode: bool = True):
+    """Configure performance settings"""
+    global MAX_MEMORIES_FAST, BACKGROUND_PROCESSING, MAX_RESPONSE_LENGTH
+    
+    if fast_mode:
+        MAX_MEMORIES_FAST = 2  # Fewer memories for speed
+        BACKGROUND_PROCESSING = True
+        MAX_RESPONSE_LENGTH = 350  # Shorter responses
+        print("⚡ PERFORMANCE MODE: Fast memory retrieval with background processing")
+    else:
+        MAX_MEMORIES_FAST = 5  # More memories
+        BACKGROUND_PROCESSING = True
+        MAX_RESPONSE_LENGTH = 600  # Longer responses
+        print("🧠 QUALITY MODE: Full memory features with background processing")
 
 # Single, Fast Claude Response
 async def get_streamlined_claude_response(user_id: str, player_input: str) -> str:
@@ -435,20 +809,12 @@ async def get_streamlined_claude_response(user_id: str, player_input: str) -> st
         print(f"❌ Streamlined Claude error: {e}")
         return f"Donnie pauses momentarily... (Error: {str(e)[:50]})"
 
-def create_tts_version_with_continuation(dm_response: str) -> tuple[str, str]:
-    """Create TTS-optimized version and extract continuation text"""
+def create_tts_version(dm_response: str) -> str:
+    """Create TTS-optimized version of DM response"""
     # Clean for TTS
-    tts_text = dm_response.replace("**", "").replace("*", "")
-    
-    # For now, no continuation splitting - return full response
-    continuation_text = ""
-    
-    return tts_text, continuation_text
+    return dm_response.replace("**", "").replace("*", "")
 
-async def send_continuation_if_needed(message, dm_response: str, tts_text: str, continuation_text: str, guild_id: int, character_name: str):
-    """Send continuation if needed - placeholder for future implementation"""
-    # For now, this is a placeholder since we're not implementing continuation splitting
-    pass
+# Continuation functionality removed - not implemented in this version
 
 # Enhanced Background Processor with Memory Integration
 async def process_enhanced_dm_response_background(user_id: str, player_input: str, message, 
@@ -459,8 +825,8 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
         # Use enhanced DM response with persistent memory
         dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
         
-        # Get TTS version and continuation
-        tts_text, continuation_text = create_tts_version_with_continuation(dm_response)
+        # Get TTS version
+        tts_text = create_tts_version(dm_response)
         
         # Update the message with the actual response (show full response in text)
         embed = message.embeds[0]
@@ -481,55 +847,18 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
         if voice_will_speak:
             await add_to_voice_queue(guild_id, tts_text, character_name, message)
         
-        # Send continuation if needed
-        if continuation_text:
-            await send_continuation_if_needed(
-                message, dm_response, tts_text, continuation_text, guild_id, character_name
-            )
+        # Continuation functionality not implemented in this version
             
     except Exception as e:
         print(f"Enhanced background processing error: {e}")
         import traceback
         traceback.print_exc()
         
-        # Fallback error handling
-        embed = message.embeds[0]
-        for i, field in enumerate(embed.fields):
-            if field.name == "🐉 Donnie the DM":
-                embed.set_field_at(i, name="🐉 Donnie the DM", 
-                                 value="*Donnie pauses momentarily...*", inline=False)
-                break
-        
-        view = ContinueView(user_id)
-        await message.edit(embed=embed, view=view)
+        # Use centralized error handling
+        await handle_dm_response_error(message, user_id)
 
-# Streamlined Background Processor
-async def process_streamlined_dm_response(user_id: str, player_input: str, message, 
-                                        character_name: str, guild_id: int, voice_will_speak: bool):
-    """Fast background processing with continue button"""
-    try:
-        # Get character data
-        char_data = campaign_context["players"][user_id]["character_data"]
-        player_name = campaign_context["players"][user_id]["player_name"]
-        
-        # Use the enhanced processing function
-        await process_enhanced_dm_response_background(
-            user_id, player_input, message, character_name, char_data, 
-            player_name, guild_id, voice_will_speak
-        )
-            
-    except Exception as e:
-        print(f"❌ Streamlined processing error: {e}")
-        # Simple error handling
-        embed = message.embeds[0]
-        for i, field in enumerate(embed.fields):
-            if field.name == "🐉 Donnie the DM" or "Donnie" in field.name:
-                embed.set_field_at(i, name="🐉 Donnie the DM", 
-                                 value="*Donnie pauses momentarily...*", inline=False)
-                break
-        
-        view = ContinueView(user_id)
-        await message.edit(embed=embed, view=view)
+# REMOVED: process_streamlined_dm_response - was redundant wrapper
+# All calls now go directly to process_enhanced_dm_response_background
 
 async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
     """Generate TTS audio using OpenAI's API - optimized for speed"""
@@ -900,7 +1229,8 @@ async def on_guild_join(guild):
                 voice_speed=1.25,
                 voice_quality='smart',
                 tts_enabled=False,
-                current_episode=0
+                current_episode=0,
+                current_scene=""  # Initialize with empty scene
             )
             
             print(f"✅ Initialized database settings for guild: {guild.name}")
@@ -911,7 +1241,7 @@ async def on_guild_join(guild):
 @bot.event  
 async def on_guild_remove(guild):
     """Clean up when bot leaves a guild"""
-    guild_id = guild.id
+    guild_id = guild.id  # This is already an int
     
     # Clean up in-memory state
     if guild_id in voice_clients:
@@ -921,7 +1251,7 @@ async def on_guild_remove(guild):
         except:
             pass
     
-    # Clean up other guild-specific data
+    # Clean up other guild-specific data (use int keys)
     voice_speed.pop(guild_id, None)
     tts_enabled.pop(guild_id, None) 
     voice_queue.pop(guild_id, None)
@@ -935,7 +1265,7 @@ async def on_message(message):
     
     # Auto-sync campaign context with database when messages are received
     if DATABASE_AVAILABLE and message.guild:
-        guild_id = str(message.guild.id)
+        guild_id = str(message.guild.id)  # Convert to string for database operations
         
         # Only sync occasionally to avoid performance issues
         if random.random() < 0.1:  # 10% chance per message
@@ -1988,6 +2318,19 @@ async def set_scene(interaction: discord.Interaction, scene_description: str):
     """Update current scene (Admin only)"""
     if hasattr(interaction.user, 'guild_permissions') and interaction.user.guild_permissions.administrator:
         campaign_context["current_scene"] = scene_description
+        
+        # Also update in database if available
+        if DATABASE_AVAILABLE:
+            try:
+                guild_id = str(interaction.guild.id)
+                GuildOperations.update_guild_settings(
+                    guild_id,
+                    current_scene=scene_description
+                )
+                print(f"✅ Scene updated in database for guild {guild_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to update scene in database: {e}")
+        
         embed = discord.Embed(
             title="🏛️ Scene Updated",
             description=scene_description,
@@ -1996,6 +2339,181 @@ async def set_scene(interaction: discord.Interaction, scene_description: str):
         await interaction.response.send_message(embed=embed)
     else:
         await interaction.response.send_message("❌ Only server administrators can update scenes!", ephemeral=True)
+
+@bot.tree.command(name="get_last_scene", description="Retrieve scene from last episode (Admin only)")
+async def get_last_scene(interaction: discord.Interaction):
+    """Get scene from the last episode"""
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    if not DATABASE_AVAILABLE:
+        await interaction.response.send_message("❌ Database not available!", ephemeral=True)
+        return
+    
+    try:
+        guild_id = str(interaction.guild.id)
+        
+        # Get the last completed episode (check if method exists)
+        if hasattr(EpisodeOperations, 'get_last_completed_episode'):
+            last_episode = EpisodeOperations.get_last_completed_episode(guild_id)
+        else:
+            # Fallback: get episodes and find the last one manually
+            print("⚠️ get_last_completed_episode method not found, using fallback")
+            last_episode = None
+        if last_episode and hasattr(last_episode, 'ending_scene') and last_episode.ending_scene:
+            # Update current scene to last episode's ending
+            campaign_context["current_scene"] = last_episode.ending_scene
+            
+            embed = discord.Embed(
+                title="📍 Scene Retrieved from Last Episode",
+                description=last_episode.ending_scene,
+                color=0x32CD32
+            )
+            embed.add_field(
+                name="Source",
+                value=f"Episode {last_episode.episode_number}: {last_episode.name}",
+                inline=False
+            )
+        else:
+            embed = discord.Embed(
+                title="⚠️ No Previous Scene Found",
+                description="No completed episodes with ending scenes found. Using default scene.",
+                color=0xFFD700
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error retrieving last scene: {e}", ephemeral=True)
+
+@bot.tree.command(name="clear_test_data", description="Clear all episodes and memories for testing (Admin only)")
+@app_commands.describe(
+    confirm="Type 'DELETE ALL DATA' to confirm deletion"
+)
+async def clear_test_data(interaction: discord.Interaction, confirm: str):
+    """Clear all test data (Admin only)"""
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    if confirm != "DELETE ALL DATA":
+        embed = discord.Embed(
+            title="⚠️ Confirmation Required",
+            description="To delete all episodes and memories, use:\n`/clear_test_data confirm:DELETE ALL DATA`",
+            color=0xFF4500
+        )
+        embed.add_field(
+            name="⚠️ WARNING",
+            value="This will permanently delete:\n• All episodes\n• All memories\n• All character progression\n• All session history",
+            inline=False
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    if not DATABASE_AVAILABLE:
+        await interaction.response.send_message("❌ Database not available!", ephemeral=True)
+        return
+    
+    try:
+        guild_id = str(interaction.guild.id)
+        
+        # Clear campaign context
+        campaign_context["session_history"] = []
+        campaign_context["current_episode"] = 0
+        campaign_context["episode_active"] = False
+        campaign_context["episode_start_time"] = None
+        
+        # Clear database data
+        from database.database import get_db_connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Delete all data for this guild
+        tables_to_clear = [
+            "episodes",
+            "conversation_memories", 
+            "npc_memories",
+            "memory_consolidation",
+            "world_state",
+            "character_progression"
+        ]
+        
+        deleted_counts = {}
+        for table in tables_to_clear:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE campaign_id = ? OR guild_id = ?", (guild_id, guild_id))
+                count = cursor.fetchone()[0]
+                
+                cursor.execute(f"DELETE FROM {table} WHERE campaign_id = ? OR guild_id = ?", (guild_id, guild_id))
+                deleted_counts[table] = count
+            except Exception as e:
+                print(f"Error clearing {table}: {e}")
+                deleted_counts[table] = "Error"
+        
+        conn.commit()
+        
+        embed = discord.Embed(
+            title="🗑️ Test Data Cleared Successfully",
+            description="All episodes and memories have been deleted.",
+            color=0x32CD32
+        )
+        
+        for table, count in deleted_counts.items():
+            embed.add_field(
+                name=f"📊 {table.replace('_', ' ').title()}",
+                value=f"Deleted: {count}",
+                inline=True
+            )
+        
+        embed.add_field(
+            name="✅ Next Steps",
+            value="• Use `/start_episode` to begin fresh\n• Characters are preserved\n• Use `/set_scene` to set initial scene",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error clearing data: {e}", ephemeral=True)
+
+@bot.tree.command(name="update_scene_from_response", description="Update scene based on last DM response (Admin only)")
+@app_commands.describe(new_scene="Description of where the party is now")
+async def update_scene_from_response(interaction: discord.Interaction, new_scene: str):
+    """Update the current scene based on recent events"""
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    # Update scene
+    campaign_context["current_scene"] = new_scene
+    
+    # Update in database if available
+    if DATABASE_AVAILABLE:
+        try:
+            guild_id = str(interaction.guild.id)
+            
+            # Update current episode with new scene
+            current_episode = EpisodeOperations.get_current_episode(guild_id)
+            if current_episode:
+                # This would need a method to update episode scene - might need to add this
+                pass
+                
+        except Exception as e:
+            print(f"⚠️ Failed to update scene in episode: {e}")
+    
+    embed = discord.Embed(
+        title="📍 Scene Updated",
+        description=new_scene,
+        color=0x4169E1
+    )
+    embed.add_field(
+        name="💡 Tip",
+        value="This scene will be used as the starting point for future episodes.",
+        inline=False
+    )
+    
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="cleanup_confirmations", description="Clean up expired character sheet confirmations (Admin only)")
 async def cleanup_confirmations(interaction: discord.Interaction):
@@ -2219,7 +2737,7 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="⚙️ Admin Commands",
-        value="`/set_scene` - Update current scene\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter\n`/debug_memory` - Check memory system status",
+        value="`/set_scene` - Update current scene\n`/get_last_scene` - Load scene from last episode\n`/update_scene_from_response` - Update scene based on events\n`/clear_test_data` - Clear all episodes/memories (testing)\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter\n`/debug_memory` - Check memory system status",
         inline=False
     )
     
@@ -2336,13 +2854,16 @@ def update_database_from_campaign_context(guild_id: str):
                 campaign_context["session_history"]
             )
         
-        # Update guild settings
-        GuildOperations.update_guild_settings(
-            guild_id,
-            voice_speed=voice_speed.get(guild_id, 1.25),
-            tts_enabled=tts_enabled.get(guild_id, False),
-            current_episode=campaign_context.get("current_episode", 0)
-        )
+        # Update guild settings including current scene
+        guild_id_int = int(guild_id) if guild_id.isdigit() else None
+        if guild_id_int:
+            GuildOperations.update_guild_settings(
+                guild_id,
+                voice_speed=voice_speed.get(guild_id_int, 1.25),
+                tts_enabled=tts_enabled.get(guild_id_int, False),
+                current_episode=campaign_context.get("current_episode", 0),
+                current_scene=campaign_context.get("current_scene", "")
+            )
         
     except Exception as e:
         print(f"⚠️ Failed to update database: {e}")

@@ -46,13 +46,18 @@ except ImportError:
     PERSISTENT_MEMORY_AVAILABLE = False
     print("⚠️ Enhanced DM system not available - memory consolidation disabled")
 
+# Modify your episode_commands.py EpisodeCommands class __init__ method:
+
 class EpisodeCommands:
     """Enhanced Episode Management with Database Integration, State Sync, and Memory Consolidation"""
+    
+    # Class variable to track if commands are already registered
+    _commands_registered = False
     
     def __init__(self, bot: commands.Bot, campaign_context: Dict, voice_clients: Dict,
                  tts_enabled: Dict, add_to_voice_queue_func: Callable,
                  episode_operations=None, character_operations=None, guild_operations=None,
-                 claude_client=None, sync_function=None):  # ✅ FIXED: Added new parameters
+                 claude_client=None, sync_function=None):
         self.bot = bot
         self.campaign_context = campaign_context
         self.voice_clients = voice_clients
@@ -64,20 +69,33 @@ class EpisodeCommands:
         self.character_ops = character_operations or CharacterOperations
         self.guild_ops = guild_operations or GuildOperations
         
-        # ✅ FIXED: Store passed parameters instead of importing
+        # Store passed parameters instead of importing
         self.claude_client = claude_client
         self.sync_function = sync_function
         
-        # Register commands
-        self._register_commands()
+        # Register commands ONLY if not already registered
+        if not EpisodeCommands._commands_registered:
+            print("📺 Registering episode commands for the first time...")
+            self._register_commands()
+            EpisodeCommands._commands_registered = True
+            print("✅ Episode commands registered successfully")
+        else:
+            print("⚠️ Episode commands already registered, skipping duplicate registration")
         
         print(f"✅ Episode Commands initialized (Database: {'✅' if DATABASE_AVAILABLE else '❌'})")
         print(f"🔄 State Sync: {'✅' if self.sync_function else '❌'}")
         print(f"🧠 Memory Consolidation: {'✅' if PERSISTENT_MEMORY_AVAILABLE else '❌'})")
         print(f"🤖 Claude Client: {'✅' if self.claude_client else '❌'}")
     
+    # Add a class method to reset registration state (for development)
+    @classmethod
+    def reset_registration(cls):
+        """Reset command registration state - use for development only"""
+        cls._commands_registered = False
+        print("🔄 Episode command registration state reset")
+    
     def _register_commands(self):
-        """Register all episode-related commands"""
+        """Register all episode-related commands - only called once per bot session"""
         
         @self.bot.tree.command(name="start_episode", description="Begin a new episode with database tracking and AI recap")
         @app_commands.describe(
@@ -117,6 +135,9 @@ class EpisodeCommands:
         @self.bot.tree.command(name="episode_status", description="Check current episode status and progress")
         async def episode_status(interaction: discord.Interaction):
             await self._episode_status_command(interaction)
+    
+    # Rest of your existing methods remain the same...
+    # (all the _start_episode_command, _end_episode_command, etc. methods))
     
     async def _start_episode_command(self, interaction: discord.Interaction, 
                                    episode_name: Optional[str], recap_previous: bool):
