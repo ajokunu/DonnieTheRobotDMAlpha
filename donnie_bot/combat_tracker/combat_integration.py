@@ -30,9 +30,9 @@ class CombatIntegration:
         return self.combat_managers[channel_id]
     
     async def process_action_with_combat(self, user_id: str, player_input: str, 
-                                       guild_id: int) -> Tuple[str, Optional[str]]:
+                                       channel_id: int) -> Tuple[str, Optional[str]]:
         """Process action with combat awareness"""
-        combat_manager = self.get_combat_manager(guild_id)
+        combat_manager = self.get_combat_manager(channel_id)
         
         # Get minimal combat context
         combat_context = combat_manager.get_minimal_context()
@@ -44,7 +44,7 @@ class CombatIntegration:
         
         # Process combat state in background
         asyncio.create_task(self._update_combat_background(
-            combat_manager, player_input, dm_response, guild_id
+            combat_manager, player_input, dm_response, channel_id
         ))
         
         return dm_response, combat_context

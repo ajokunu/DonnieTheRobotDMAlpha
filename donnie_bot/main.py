@@ -262,6 +262,7 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
     
     # Use the same processing as /action but with "continue" as input
     guild_id = interaction.guild.id
+    channel_id = interaction.channel.id
     voice_will_speak = (guild_id in voice_clients and 
                        voice_clients[guild_id].is_connected() and 
                        tts_enabled.get(guild_id, False))
@@ -287,8 +288,9 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
     
     # Process in background
     asyncio.create_task(process_enhanced_dm_response_background(
-        user_id, "continue", message, character_name, char_data, 
-        campaign_context["players"][user_id]["player_name"], guild_id, voice_will_speak
+    user_id, "continue", message, character_name, char_data, 
+    campaign_context["players"][user_id]["player_name"], 
+    guild_id, channel_id, voice_will_speak
     ))
 
 async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
@@ -775,7 +777,7 @@ def create_tts_version(dm_response: str) -> str:
 # Enhanced Background Processor with Memory Integration
 async def process_enhanced_dm_response_background(user_id: str, player_input: str, message, 
                                                 character_name: str, char_data: dict, 
-                                                player_name: str, guild_id: int, voice_will_speak: bool):
+                                                player_name: str, guild_id: int,channel_id : int, voice_will_speak: bool):
     """Enhanced DM response processing with combat integration"""
     try:
         # Use combat-aware response if available
@@ -783,7 +785,7 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
             combat = get_combat_integration()
             if combat:
                 dm_response, combat_context = await combat.process_action_with_combat(
-                    user_id, player_input, guild_id
+                    user_id, player_input, channel_id
                 )
             else:
                 dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
@@ -1121,7 +1123,7 @@ async def on_ready():
                         guild_operations=GuildOperations,
                         claude_client=claude_client,
                         sync_function=sync_campaign_context_with_database
-                    )
+                    ) # type: ignore
                     print("✅ Episode management system initialized with database support")
                 except Exception as e:
                     print(f"⚠️ Episode management initialization failed: {e}")
@@ -1139,7 +1141,7 @@ async def on_ready():
                         add_to_voice_queue_func=add_to_voice_queue,
                         character_operations=CharacterOperations,
                         episode_operations=EpisodeOperations
-                    )
+                    ) # type: ignore
                     print("✅ Character progression system initialized with database support")
                 except Exception as e:
                     print(f"⚠️ Character progression initialization failed: {e}")
@@ -1177,8 +1179,8 @@ async def on_ready():
         # Feature status summary
         features = {
             "Database": "✅" if DATABASE_AVAILABLE else "❌",
-            "Episodes": "✅" if episode_commands else "❌", 
-            "Progression": "✅" if character_progression else "❌",
+            "Episodes": "✅" if episode_commands else "❌",  # type: ignore
+            "Progression": "✅" if character_progression else "❌", # type: ignore
             "Enhanced Voice": "✅" if enhanced_voice_manager else "❌",
             "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
             "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
@@ -1955,10 +1957,11 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     
     # Voice status
     guild_id = interaction.guild.id
+    channel_id = interaction.channel_id if interaction.channel_id is not None else 0
     voice_will_speak = (guild_id in voice_clients and 
                        voice_clients[guild_id].is_connected() and 
                        tts_enabled.get(guild_id, False))
-    
+
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
     
@@ -1976,7 +1979,7 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     
     # Process in background using enhanced system
     asyncio.create_task(process_enhanced_dm_response_background(
-        user_id, what_you_do, message, character_name, char_data, player_name, guild_id, voice_will_speak
+        user_id, what_you_do, message, character_name, char_data, player_name, guild_id, channel_id, voice_will_speak
     ))
 
 @bot.tree.command(name="roll", description="Roll dice for your Storm King's Thunder adventure")
