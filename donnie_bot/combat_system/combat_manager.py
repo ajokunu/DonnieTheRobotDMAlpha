@@ -279,6 +279,55 @@ class CombatManager:
         """Check if combat is active"""
         return self.phase == CombatPhase.ACTIVE
     
+    # === NEW METHODS FOR COMBAT_INTEGRATION COMPATIBILITY ===
+    
+    def is_combat_active(self) -> bool:
+        """Alias for is_active() - used by combat_integration"""
+        return self.is_active()
+    
+    def get_round_number(self) -> int:
+        """Get current round number - used by combat_integration"""
+        return self.round_number
+    
+    def get_current_turn(self) -> Optional[str]:
+        """Get current turn character name - used by combat_integration"""
+        current = self.get_current_combatant()
+        return current.name if current else None
+    
+    def get_character_status(self, character_name: str) -> List[str]:
+        """Get status effects for character - used by combat_integration"""
+        for combatant in self.combatants.values():
+            if combatant.name.lower() == character_name.lower():
+                status_effects = []
+                
+                # Add conditions
+                if combatant.conditions:
+                    status_effects.extend(combatant.conditions)
+                
+                # Add position info
+                if combatant.position:
+                    status_effects.append(combatant.position)
+                
+                # Add HP status if low
+                if combatant.current_hp is not None and combatant.max_hp is not None:
+                    hp_percent = combatant.current_hp / combatant.max_hp
+                    if hp_percent <= 0.25:
+                        status_effects.append("critically wounded")
+                    elif hp_percent <= 0.5:
+                        status_effects.append("bloodied")
+                
+                return status_effects
+        
+        return []
+    
+    def start_combat(self):
+        """Start combat - used by combat_integration"""
+        if self.phase == CombatPhase.SETUP:
+            self.phase = CombatPhase.ACTIVE
+            if self.round_number == 0:
+                self.round_number = 1
+            print(f"🎯 Combat started in channel {self.channel_id}")
+    
     def end_combat(self):
         """End combat"""
         self.phase = CombatPhase.ENDED
