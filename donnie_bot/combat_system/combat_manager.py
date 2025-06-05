@@ -1,13 +1,14 @@
 # combat_manager.py
 """
-DM Donnie Combat Manager - Core State Management
-Tracks combat state from DM responses without hardcoding content
+DM Donnie Combat Manager - Core State Management (CORRECTED VERSION)
+Tracks combat state from DM responses without interfering with narrative
+REMOVED: Auto scene changes, auto enemy generation, battlefield extraction
+KEPT: Initiative, HP, positions, conditions tracking
 """
 
-import asyncio
 import re
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from typing import Dict, List, Optional
+from dataclasses import dataclass, field
 from enum import Enum
 import time
 
@@ -25,15 +26,11 @@ class Combatant:
     current_hp: Optional[int] = None
     max_hp: Optional[int] = None
     initiative: Optional[int] = None
-    conditions: List[str] = None
+    conditions: List[str] = field(default_factory=list)
     position: Optional[str] = None
-    
-    def __post_init__(self):
-        if self.conditions is None:
-            self.conditions = []
 
 class CombatManager:
-    """Fast combat state manager for DM Donnie"""
+    """Combat state manager WITHOUT narrative interference"""
     
     def __init__(self, channel_id: int):
         self.channel_id = channel_id
@@ -41,11 +38,10 @@ class CombatManager:
         self.round_number = 0
         self.turn_index = 0
         
-        # State tracking
+        # State tracking ONLY
         self.combatants: Dict[str, Combatant] = {}
         self.initiative_order: List[str] = []
         self.last_dm_response = ""
-        self.battlefield_description = ""
         
         # Pre-compiled regex for speed
         self._hp_pattern = re.compile(r'(\w+)[^\d]*(\d+)[^\d]*(?:hp|hit points?)', re.IGNORECASE)
@@ -73,8 +69,6 @@ class CombatManager:
         
         # Parse based on phase
         if self.phase == CombatPhase.SETUP:
-            self._extract_enemies(dm_response)
-            self._extract_battlefield(dm_response)
             if 'initiative' in response_lower or 'combat begins' in response_lower:
                 self.phase = CombatPhase.ACTIVE
                 self.round_number = 1
@@ -96,51 +90,6 @@ class CombatManager:
             print(f"⚠️ Slow combat parsing: {elapsed:.3f}s")
         
         return True
-    
-    def _extract_enemies(self, text: str):
-        """Extract enemies from DM response"""
-        common_enemies = [
-            'goblin', 'orc', 'skeleton', 'zombie', 'wolf', 'bear', 'giant',
-            'bandit', 'guard', 'soldier', 'warrior', 'mage', 'wizard', 'dragon',
-            'troll', 'ogre', 'kobold', 'gnoll', 'hobgoblin', 'bugbear'
-        ]
-        
-        text_lower = text.lower()
-        for enemy_type in common_enemies:
-            if enemy_type in text_lower:
-                # Check if we already have this type of enemy
-                existing_count = sum(1 for c in self.combatants.values() 
-                                   if enemy_type.lower() in c.name.lower() and not c.is_player)
-                
-                enemy_id = f"{enemy_type}_{existing_count + 1}"
-                if enemy_id not in self.combatants:
-                    display_name = enemy_type.title()
-                    if existing_count > 0:
-                        display_name = f"{enemy_type.title()} {existing_count + 1}"
-                    
-                    self.combatants[enemy_id] = Combatant(
-                        id=enemy_id,
-                        name=display_name,
-                        is_player=False
-                    )
-    
-    def _extract_battlefield(self, text: str):
-        """Extract battlefield description"""
-        environment_indicators = [
-            "room", "chamber", "forest", "clearing", "battlefield", "terrain",
-            "cover", "obstacles", "lighting", "darkness", "bright", "dim",
-            "cavern", "tunnel", "bridge", "cliff", "stairs", "platform"
-        ]
-        
-        lines = text.split('\n')
-        battlefield_lines = []
-        
-        for line in lines:
-            if any(indicator in line.lower() for indicator in environment_indicators):
-                battlefield_lines.append(line.strip())
-        
-        if battlefield_lines:
-            self.battlefield_description = " ".join(battlefield_lines)
     
     def _update_hp(self, text: str):
         """Fast HP extraction"""
@@ -185,7 +134,6 @@ class CombatManager:
         
         for full_desc, short_desc in position_descriptions:
             if full_desc in response_lower:
-                # Try to associate with a combatant name nearby
                 pattern = rf"(\w+).*?{re.escape(full_desc)}"
                 match = re.search(pattern, response_lower)
                 if match:
@@ -207,7 +155,6 @@ class CombatManager:
         
         for condition in conditions:
             if condition in response_lower:
-                # Try to find which combatant has this condition
                 pattern = rf"(\w+).*?{re.escape(condition)}"
                 match = re.search(pattern, response_lower)
                 if match:
@@ -227,6 +174,20 @@ class CombatManager:
             initiative=initiative
         )
         self._rebuild_initiative_order()
+    
+    def add_enemy_manually(self, enemy_name: str, initiative: int, hp: Optional[int] = None):
+        """Manually add enemy (DM controlled)"""
+        enemy_id = f"enemy_{len([c for c in self.combatants.values() if not c.is_player])}"
+        self.combatants[enemy_id] = Combatant(
+            id=enemy_id,
+            name=enemy_name,
+            is_player=False,
+            initiative=initiative,
+            current_hp=hp,
+            max_hp=hp
+        )
+        self._rebuild_initiative_order()
+        print(f"✅ Enemy added manually: {enemy_name} (Init: {initiative})")
     
     def _rebuild_initiative_order(self):
         """Sort by initiative"""
@@ -279,36 +240,33 @@ class CombatManager:
         """Check if combat is active"""
         return self.phase == CombatPhase.ACTIVE
     
-    # === NEW METHODS FOR COMBAT_INTEGRATION COMPATIBILITY ===
+    # === COMPATIBILITY METHODS FOR COMBAT_INTEGRATION ===
     
     def is_combat_active(self) -> bool:
-        """Alias for is_active() - used by combat_integration"""
+        """Alias for is_active()"""
         return self.is_active()
     
     def get_round_number(self) -> int:
-        """Get current round number - used by combat_integration"""
+        """Get current round number"""
         return self.round_number
     
     def get_current_turn(self) -> Optional[str]:
-        """Get current turn character name - used by combat_integration"""
+        """Get current turn character name"""
         current = self.get_current_combatant()
         return current.name if current else None
     
     def get_character_status(self, character_name: str) -> List[str]:
-        """Get status effects for character - used by combat_integration"""
+        """Get status effects for character"""
         for combatant in self.combatants.values():
             if combatant.name.lower() == character_name.lower():
                 status_effects = []
                 
-                # Add conditions
                 if combatant.conditions:
                     status_effects.extend(combatant.conditions)
                 
-                # Add position info
                 if combatant.position:
                     status_effects.append(combatant.position)
                 
-                # Add HP status if low
                 if combatant.current_hp is not None and combatant.max_hp is not None:
                     hp_percent = combatant.current_hp / combatant.max_hp
                     if hp_percent <= 0.25:
@@ -321,7 +279,7 @@ class CombatManager:
         return []
     
     def start_combat(self):
-        """Start combat - used by combat_integration"""
+        """Start combat"""
         if self.phase == CombatPhase.SETUP:
             self.phase = CombatPhase.ACTIVE
             if self.round_number == 0:

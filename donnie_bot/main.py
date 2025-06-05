@@ -103,12 +103,15 @@ except ImportError as e:
 
 # Combat system imports - NEW COMBAT INTEGRATION!
 try:
-    from combat_tracker.combat_integration import initialize_combat_system, get_combat_integration
+    from combat_system.combat_integration import initialize_combat_system, get_combat_integration
     print("✅ Combat system imported successfully")
     COMBAT_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ Combat system not available: {e}")
     COMBAT_AVAILABLE = False
+    # Fallback: define get_combat_integration to avoid unbound errors
+    def get_combat_integration():
+        return None
 
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
@@ -175,10 +178,33 @@ STREAMLINED_DM_PROMPT = """You are Donnie, DM for Storm King's Thunder D&D 5e 20
 SETTING: {setting}
 CURRENT SCENE: {current_scene}
 PARTY: {characters}
+COMBAT STATUS: {combat_info}
+
+**CRITICAL COMBAT RULES:**
+- If combat is active, ALWAYS state: Round, whose turn, initiative order
+- Track distances between characters and enemies precisely
+- Never forget who is in combat or their positions
+- Keep responses under 700 characters
+
+**CURRENT DISTANCES & POSITIONS:**
+{distances}
 
 PLAYER ACTION: {player_input}
 
-Respond as Donnie (under 700 chars, engaging):"""
+PARTY COMPOSITION: Use the character information provided to personalize your responses. Address characters by name and reference their classes, backgrounds, and details when appropriate.
+
+DM GUIDELINES:
+- You are fair but challenging - not too easy, not too harsh
+- Giants should feel massive and threatening when encountered
+- Use vivid descriptions of the Sword Coast setting
+- Reference character abilities and backgrounds in your responses
+- Ask for dice rolls when appropriate (D&D 5e 2024 rules)
+- Keep responses 2-4 sentences for real-time play
+- Make player choices matter and have consequences
+- Create immersive roleplay opportunities
+- Address characters by their names when possible
+
+Respond as Donnie (under 700 chars, track combat precisely):"""
 
 # Continue Button View Class
 class ContinueView(discord.ui.View):
@@ -240,7 +266,11 @@ def sync_campaign_context_with_database(guild_id: str):
         if campaign_context["current_scene"] == "The village of Nightstone sits eerily quiet. Giant-sized boulders litter the village square, and not a soul can be seen moving in the streets. The party approaches the mysteriously open gates...":
             try:
                 if hasattr(EpisodeOperations, 'get_last_completed_episode'):
-                    last_episode = EpisodeOperations.get_last_completed_episode(guild_id)
+                    last_episode = None
+                    if hasattr(EpisodeOperations, 'get_last_completed_episode'):
+                        last_episode = EpisodeOperations.get_last_completed_episode(guild_id)
+                    else:
+                        print("⚠️ get_last_completed_episode method not found on EpisodeOperations")
                     if last_episode and hasattr(last_episode, 'ending_scene') and last_episode.ending_scene:
                         campaign_context["current_scene"] = last_episode.ending_scene
                         print(f"✅ Loaded scene from last episode: {last_episode.episode_number}")
@@ -551,7 +581,7 @@ async def process_memories_background(guild_id: str, episode_id: int, user_id: s
         # 🔥 BACKGROUND: Update world state if location mentioned (check if method exists)
         try:
             locations = extract_locations_fast(dm_response + " " + player_input)
-            if locations and hasattr(dm_system.memory_ops, 'update_world_state'):
+            if locations and hasattr(dm_system.memory_ops, 'update_world_state') and callable(getattr(dm_system.memory_ops, 'update_world_state', None)):
                 current_location = locations[0]  # Take first location mentioned
                 await asyncio.wait_for(
                     dm_system.memory_ops.update_world_state(
@@ -784,7 +814,7 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
         if COMBAT_AVAILABLE:
             combat = get_combat_integration()
             if combat:
-                dm_response, combat_context = await combat.process_action_with_combat(
+                dm_response, combat_context = combat.process_action_with_combat(
                     user_id, player_input, channel_id
                 )
             else:
@@ -1158,7 +1188,10 @@ async def on_ready():
     # Initialize combat system
     if COMBAT_AVAILABLE:
         try:
-            await initialize_combat_system(bot, campaign_context)
+            if 'initialize_combat_system' in globals() and callable(initialize_combat_system):
+                await initialize_combat_system(bot, campaign_context)
+            else:
+                print("⚠️ initialize_combat_system is not defined or not callable")
         except Exception as e:
             print(f"⚠️ Combat system initialization failed: {e}")
     
@@ -2898,7 +2931,7 @@ def print_system_status():
     print(f"🎤 Enhanced Voice: {'✅ Active' if enhanced_voice_manager else '❌ Disabled'}")
     print(f"🧠 Persistent Memory: {'✅ Active' if PERSISTENT_MEMORY_AVAILABLE else '❌ Disabled'}")
     print(f"⚔️  Enhanced Combat: {'✅ Active' if COMBAT_AVAILABLE else '❌ Disabled'}")
-    print(f"📄 PDF Parser: {'✅ Active' if hasattr(bot, 'pdf_character_commands') and bot.pdf_character_commands else '❌ Disabled'}")
+    print(f"📄 PDF Parser: {'✅ Active' if getattr(bot, 'pdf_character_commands', None) else '❌ Disabled'}")
     
     print("\n⚡ PERFORMANCE SETTINGS:")
     print(f"   Memory Retrieval: {MAX_MEMORIES_FAST} items (fast mode)")
