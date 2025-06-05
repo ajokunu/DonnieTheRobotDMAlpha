@@ -25,6 +25,10 @@ MAX_MEMORIES_FULL = 10  # Full memory retrieval when needed
 BACKGROUND_PROCESSING = True  # Process memories after response sent
 MAX_RESPONSE_LENGTH = 450  # Shorter responses for faster TTS
 RESPONSE_TIMEOUT = 8.0  # Maximum time to wait for Claude response
+# ====== SYSTEM VARIABLE INITIALIZATION ======
+episode_commands = None
+character_progression = None
+enhanced_voice_manager = None
 
 # ====== FIXED DATABASE AND EPISODE MANAGEMENT IMPORTS ======
 # Database imports - NOW WORKING!
@@ -97,6 +101,15 @@ except ImportError as e:
     print(f"⚠️ Enhanced DM system with persistent memory not available: {e}")
     PERSISTENT_MEMORY_AVAILABLE = False
 
+# Combat system imports - NEW COMBAT INTEGRATION!
+try:
+    from combat_tracker.combat_integration import initialize_combat_system, get_combat_integration
+    print("✅ Combat system imported successfully")
+    COMBAT_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Combat system not available: {e}")
+    COMBAT_AVAILABLE = False
+
 # Initialize APIs
 claude_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
@@ -114,16 +127,6 @@ voice_clients = {}
 tts_enabled = {}  # Track TTS status per guild
 voice_speed = {}  # Track speech speed per guild (default 1.25)
 voice_queue = {}  # Voice queue per guild to prevent overlapping
-
-# SIMPLIFIED COMBAT STATE - STREAMLINED
-combat_state = {
-    "active": False,
-    "round": 1,
-    "initiative_order": [],  # [(name, initiative_roll), ...]
-    "current_turn_index": 0,
-    "distances": {},  # {"character_name": "position_description"}
-    "enemy_count": 0
-}
 
 # DM Thinking Sounds - ACTUAL sounds, not descriptions
 DM_THINKING_SOUNDS = [
@@ -172,20 +175,10 @@ STREAMLINED_DM_PROMPT = """You are Donnie, DM for Storm King's Thunder D&D 5e 20
 SETTING: {setting}
 CURRENT SCENE: {current_scene}
 PARTY: {characters}
-COMBAT STATUS: {combat_info}
-
-**CRITICAL COMBAT RULES:**
-- If combat is active, ALWAYS state: Round, whose turn, initiative order
-- Track distances between characters and enemies precisely
-- Never forget who is in combat or their positions
-- Keep responses under 700 characters
-
-**CURRENT DISTANCES & POSITIONS:**
-{distances}
 
 PLAYER ACTION: {player_input}
 
-Respond as Donnie (under 700 chars, track combat precisely):"""
+Respond as Donnie (under 700 chars, engaging):"""
 
 # Continue Button View Class
 class ContinueView(discord.ui.View):
@@ -297,15 +290,6 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
         user_id, "continue", message, character_name, char_data, 
         campaign_context["players"][user_id]["player_name"], guild_id, voice_will_speak
     ))
-
-# Simple Combat Detection
-def detect_combat_keywords(player_input: str) -> bool:
-    """Fast keyword detection for combat"""
-    combat_keywords = [
-        "attack", "fight", "charge", "shoot", "cast", "initiative", 
-        "draw weapon", "strike", "hit", "damage", "combat", "battle"
-    ]
-    return any(keyword in player_input.lower() for keyword in combat_keywords)
 
 async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
     """OPTIMIZED Enhanced DM response - Fast response + background memory processing"""
@@ -422,17 +406,30 @@ async def get_fast_dm_response_with_memory(user_id: str, player_input: str, memo
             recent_history = f"Recent: {last_interaction.get('action', '')[:50]}..."
         
         # ⚡ ULTRA-FAST prompt for speed
-        fast_prompt = f"""You are Donnie, DM for Storm King's Thunder D&D 5e.
+        # ⚡ BALANCED prompt - D&D rules + natural progression  
+        fast_prompt = f"""You are Donnie, experienced DM for Storm King's Thunder D&D 5e 2024.
 
-SETTING: Giants threaten the Sword Coast. Ordning collapsed.
-SCENE: {campaign_context.get("current_scene", "Adventure continues")[:150]}
-PARTY: {characters_text}
-{f"CONTEXT: {memory_context[:100]}" if memory_context else ""}
-{f"PREVIOUS: {recent_history}" if recent_history else ""}
+            **DM GUIDELINES:**
+            - Follow D&D 5e rules precisely
+            - Use current scene as starting point
+            - Progress story naturally when players move or investigate
+            - Don't randomly jump to unrelated locations
+            - Ask for dice rolls when rules require them
+            - Make consequences meaningful in this giant-threatened world
 
-PLAYER: {character_name}: {player_input}
+            **CURRENT SCENE:**
+            {campaign_context.get("current_scene", "Adventure continues")[:200]}
 
-Respond as Donnie (under {MAX_RESPONSE_LENGTH} chars, engaging):"""
+            **CAMPAIGN CONTEXT:**
+            Giants threaten the Sword Coast. The ancient ordning has collapsed, throwing giantkind into chaos.
+
+            **PARTY:** {characters_text}
+            {f"**RECENT CONTEXT:** {memory_context[:80]}" if memory_context else ""}
+            {f"**PREVIOUS ACTION:** {recent_history}" if recent_history else ""}
+
+            **PLAYER ACTION:** {character_name}: {player_input}
+
+            **DM RESPONSE (under {MAX_RESPONSE_LENGTH} chars, continue story naturally from current scene):**"""
 
         # ⚡ FAST: Single Claude API call with aggressive optimization
         response = await asyncio.wait_for(
@@ -704,7 +701,7 @@ def configure_performance_mode(fast_mode: bool = True):
 
 # Single, Fast Claude Response
 async def get_streamlined_claude_response(user_id: str, player_input: str) -> str:
-    """Single, optimized Claude call with combat tracking"""
+    """Single, optimized Claude call"""
     try:
         # Get character info
         player_data = campaign_context["players"][user_id]
@@ -718,52 +715,11 @@ async def get_streamlined_claude_response(user_id: str, player_input: str) -> st
             c_data = p_data["character_data"]
             characters_text.append(f"{c_data['name']} (Lvl {c_data['level']} {c_data['race']} {c_data['class']})")
         
-        # Build combat info string
-        combat_info = "No active combat"
-        if combat_state["active"]:
-            current_turn_name = "Unknown"
-            if combat_state["initiative_order"] and combat_state["current_turn_index"] < len(combat_state["initiative_order"]):
-                current_turn_name = combat_state["initiative_order"][combat_state["current_turn_index"]][0]
-            
-            combat_info = f"COMBAT ACTIVE - Round {combat_state['round']} - {current_turn_name}'s turn"
-            if combat_state["initiative_order"]:
-                init_list = [f"{name}({init})" for name, init in combat_state["initiative_order"]]
-                combat_info += f" - Order: {', '.join(init_list)}"
-        
-        # Build distances string
-        distances_text = ""
-        if combat_state["distances"]:
-            distances_text = "\n".join([f"{name}: {pos}" for name, pos in combat_state["distances"].items()])
-        else:
-            distances_text = "No combat positions tracked"
-        
-        # Check for combat trigger
-        if detect_combat_keywords(player_input) and not combat_state["active"]:
-            # Start simple combat
-            combat_state["active"] = True
-            combat_state["round"] = 1
-            combat_state["current_turn_index"] = 0
-            
-            # Simple initiative for party (enemies will be added by DM response)
-            initiative_order = []
-            for uid, p_data in campaign_context["players"].items():
-                c_data = p_data["character_data"]
-                init_roll = random.randint(1, 20) + 2  # Assume +2 dex mod
-                initiative_order.append((c_data['name'], init_roll))
-            
-            # Sort by initiative
-            initiative_order.sort(key=lambda x: x[1], reverse=True)
-            combat_state["initiative_order"] = initiative_order
-            
-            combat_info = f"COMBAT STARTING - Round 1 - {initiative_order[0][0]}'s turn - Order: {', '.join([f'{name}({init})' for name, init in initiative_order])}"
-        
         # Create prompt
         formatted_prompt = STREAMLINED_DM_PROMPT.format(
             setting=campaign_context["setting"][:200],  # Truncate setting
             current_scene=campaign_context["current_scene"][:300],  # Truncate scene
             characters=", ".join(characters_text),
-            combat_info=combat_info,
-            distances=distances_text,
             player_input=f"{character_name}: {player_input}"
         )
         
@@ -820,45 +776,41 @@ def create_tts_version(dm_response: str) -> str:
 async def process_enhanced_dm_response_background(user_id: str, player_input: str, message, 
                                                 character_name: str, char_data: dict, 
                                                 player_name: str, guild_id: int, voice_will_speak: bool):
-    """Process DM response with enhanced memory and automatic continuation support"""
+    """Enhanced DM response processing with combat integration"""
     try:
-        # Use enhanced DM response with persistent memory
-        dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
+        # Use combat-aware response if available
+        if COMBAT_AVAILABLE:
+            combat = get_combat_integration()
+            if combat:
+                dm_response, combat_context = await combat.process_action_with_combat(
+                    user_id, player_input, guild_id
+                )
+            else:
+                dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
+        else:
+            dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
         
-        # Get TTS version
+        # Your existing message update code (unchanged)
         tts_text = create_tts_version(dm_response)
         
-        # Update the message with the actual response (show full response in text)
         embed = message.embeds[0]
-        
-        # Update DM response field with FULL response
         for i, field in enumerate(embed.fields):
             if field.name == "🐉 Donnie the DM":
                 embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
                 break
         
-        # Create continue button view
         view = ContinueView(user_id)
-        
-        # Update message with response and continue button
         await message.edit(embed=embed, view=view)
         
-        # Add to voice queue if voice is enabled (use TTS-optimized version for speed)
+        # Your existing voice processing (unchanged)
         if voice_will_speak:
             await add_to_voice_queue(guild_id, tts_text, character_name, message)
-        
-        # Continuation functionality not implemented in this version
             
     except Exception as e:
         print(f"Enhanced background processing error: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Use centralized error handling
         await handle_dm_response_error(message, user_id)
-
-# REMOVED: process_streamlined_dm_response - was redundant wrapper
-# All calls now go directly to process_enhanced_dm_response_background
 
 async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
     """Generate TTS audio using OpenAI's API - optimized for speed"""
@@ -1138,7 +1090,7 @@ async def on_ready():
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
-    print(f'⚡ STREAMLINED Combat System loaded!')
+    print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
     print(f'🧠 Enhanced Memory System: {"✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"}')
     
     # Initialize database with enhanced error handling
@@ -1155,11 +1107,58 @@ async def on_ready():
             else:
                 print("⚠️ Database health check failed")
                 
+            # ✅ CORRECT LOCATION - After successful database initialization
+            if EPISODE_MANAGER_AVAILABLE:
+                try:
+                    episode_commands = EpisodeCommands(
+                        bot=bot,
+                        campaign_context=campaign_context,
+                        voice_clients=voice_clients,
+                        tts_enabled=tts_enabled,
+                        add_to_voice_queue_func=add_to_voice_queue,
+                        episode_operations=EpisodeOperations,
+                        character_operations=CharacterOperations,
+                        guild_operations=GuildOperations,
+                        claude_client=claude_client,
+                        sync_function=sync_campaign_context_with_database
+                    )
+                    print("✅ Episode management system initialized with database support")
+                except Exception as e:
+                    print(f"⚠️ Episode management initialization failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    episode_commands = None
+            
+            if CHARACTER_PROGRESSION_AVAILABLE:
+                try:
+                    character_progression = CharacterProgressionCommands(
+                        bot=bot,
+                        campaign_context=campaign_context,
+                        voice_clients=voice_clients,
+                        tts_enabled=tts_enabled,
+                        add_to_voice_queue_func=add_to_voice_queue,
+                        character_operations=CharacterOperations,
+                        episode_operations=EpisodeOperations
+                    )
+                    print("✅ Character progression system initialized with database support")
+                except Exception as e:
+                    print(f"⚠️ Character progression initialization failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    character_progression = None
+                    
         except Exception as e:
             print(f"❌ Database initialization failed: {e}")
             print("🔄 Bot will continue without database features")
     else:
         print("⚠️ Database features disabled")
+    
+    # Initialize combat system
+    if COMBAT_AVAILABLE:
+        try:
+            await initialize_combat_system(bot, campaign_context)
+        except Exception as e:
+            print(f"⚠️ Combat system initialization failed: {e}")
     
     print('🔄 Syncing slash commands...')
     
@@ -1182,7 +1181,7 @@ async def on_ready():
             "Progression": "✅" if character_progression else "❌",
             "Enhanced Voice": "✅" if enhanced_voice_manager else "❌",
             "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
-            "Streamlined Combat": "✅",
+            "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
             "Continue Buttons": "✅",
             "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌"
         }
@@ -1311,7 +1310,7 @@ async def join_voice_channel(interaction: discord.Interaction):
         )
         
         embed.add_field(
-            name="🗣️ STREAMLINED Voice Activated",
+            name="🗣️ ENHANCED Voice Activated",
             value="Donnie will now narrate optimized DM responses with Continue buttons for faster gameplay!",
             inline=False
         )
@@ -1320,6 +1319,13 @@ async def join_voice_channel(interaction: discord.Interaction):
             embed.add_field(
                 name="🧠 Enhanced Memory Active",
                 value="Donnie will remember conversations, NPCs, and plot threads across episodes!",
+                inline=False
+            )
+        
+        if COMBAT_AVAILABLE:
+            embed.add_field(
+                name="⚔️ Combat System Active",
+                value="Donnie will track combat encounters with auto-updating display messages!",
                 inline=False
             )
         
@@ -1335,6 +1341,8 @@ async def join_voice_channel(interaction: discord.Interaction):
         welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign with streamlined combat and continue buttons for faster gameplay."
         if PERSISTENT_MEMORY_AVAILABLE:
             welcome_text += " I'll also remember your adventures across episodes!"
+        if COMBAT_AVAILABLE:
+            welcome_text += " Combat will be tracked automatically with separate display messages!"
         welcome_text += " Just describe what you want to do, and let the adventure unfold!"
         
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
@@ -1609,7 +1617,14 @@ PERSONALITY: {character_profile['personality']}
             inline=False
         )
     
-    embed.set_footer(text="Character bound to your Discord account and ready for streamlined combat!")
+    if COMBAT_AVAILABLE:
+        embed.add_field(
+            name="⚔️ Combat System",
+            value="Combat will be tracked automatically with separate display messages and initiative tracking!",
+            inline=False
+        )
+    
+        embed.set_footer(text="Character bound to your Discord account and ready for enhanced combat!")
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="party", description="View all registered characters in your party")
@@ -1870,6 +1885,13 @@ async def start_adventure(interaction: discord.Interaction):
             inline=False
         )
     
+    if COMBAT_AVAILABLE:
+        embed.add_field(
+            name="⚔️ Combat System",
+            value="Combat encounters will be tracked automatically with separate display messages showing initiative, HP, and positions!",
+            inline=False
+        )
+    
     embed.add_field(
         name="🆕 Episode Management Available",
         value="Use `/start_episode` for full campaign management with episode recaps, character progression tracking, and persistent story memory!",
@@ -1881,10 +1903,14 @@ async def start_adventure(interaction: discord.Interaction):
 
 @bot.tree.command(name="action", description="Take an action in the Storm King's Thunder campaign")
 @app_commands.describe(what_you_do="Describe what your character does or says")
-async def take_action_streamlined(interaction: discord.Interaction, what_you_do: str):
-    """Streamlined action processing - FAST"""
+async def take_action_enhanced(interaction: discord.Interaction, what_you_do: str):
+    """Enhanced action processing with combat integration"""
     user_id = str(interaction.user.id)
     player_name = interaction.user.display_name
+    print(f"🔍 DEBUG: Current scene = {campaign_context['current_scene']}")
+    print(f"🔍 DEBUG: Scene length = {len(campaign_context['current_scene'])}")
+    print(f"🔍 DEBUG: Episode active = {campaign_context.get('episode_active', False)}")
+    print(f"🔍 DEBUG: Using enhanced response = {PERSISTENT_MEMORY_AVAILABLE}")
     
     # Quick validation
     if user_id not in campaign_context["characters"]:
@@ -1936,12 +1962,12 @@ async def take_action_streamlined(interaction: discord.Interaction, what_you_do:
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
     
-    # Footer with combat info
+    # Footer with info
     footer_text = f"Level {char_data['level']} • {char_data['background']}"
-    if combat_state["active"]:
-        footer_text += f" • ⚔️ Round {combat_state['round']}"
     if PERSISTENT_MEMORY_AVAILABLE:
         footer_text += " • 🧠 Memory Active"
+    if COMBAT_AVAILABLE:
+        footer_text += " • ⚔️ Combat Tracking"
     embed.set_footer(text=footer_text)
     
     # Send immediate response
@@ -2067,13 +2093,23 @@ async def show_status(interaction: discord.Interaction):
         inline=True
     )
     
-    # Combat status
-    combat_status = "⚔️ No Active Combat"
-    if combat_state["active"]:
-        combat_status = f"⚔️ **Round {combat_state['round']}** - {combat_state['enemy_count']} enemies"
+    # Combat system status
+    if COMBAT_AVAILABLE:
+        combat = get_combat_integration()
+        if combat:
+            # Check if any combat managers are active
+            active_combats = sum(1 for cm in combat.combat_managers.values() if cm.is_active())
+            if active_combats > 0:
+                combat_status = f"⚔️ {active_combats} Active Combat(s)"
+            else:
+                combat_status = "⚔️ No Active Combat"
+        else:
+            combat_status = "⚔️ Combat System Ready"
+    else:
+        combat_status = "⚔️ Combat System Disabled"
     
     embed.add_field(
-        name="⚡ Streamlined Combat",
+        name="⚔️ Combat Status",
         value=combat_status,
         inline=True
     )
@@ -2083,6 +2119,14 @@ async def show_status(interaction: discord.Interaction):
     embed.add_field(
         name="🧠 Memory System",
         value=memory_status,
+        inline=True
+    )
+    
+    # Combat system status
+    combat_system_status = "⚔️ Combat System: " + ("✅ Active" if COMBAT_AVAILABLE else "❌ Disabled")
+    embed.add_field(
+        name="⚔️ Combat System",
+        value=combat_system_status,
         inline=True
     )
     
@@ -2116,25 +2160,74 @@ async def show_status(interaction: discord.Interaction):
     if not campaign_context["characters"]:
         embed.add_field(
             name="⚠️ Next Step",
-            value="Use `/character` to register your character, then `/start_episode` to begin with full episode management and streamlined combat!",
+            value="Use `/character` to register your character, then `/start_episode` to begin with full episode management and enhanced combat!",
             inline=False
         )
     elif not campaign_context.get("session_started", False) and not campaign_context.get("episode_active", False):
         embed.add_field(
             name="⚠️ Next Step", 
-            value="Use `/start_episode` for full episode management or `/start` for simple session with streamlined combat!",
+            value="Use `/start_episode` for full episode management or `/start` for simple session with enhanced combat!",
             inline=False
         )
     
     await interaction.response.send_message(embed=embed)
 
-# ====== STREAMLINED COMBAT COMMANDS ======
+# ====== COMBAT COMMANDS ======
+
+@bot.tree.command(name="initiative", description="Add your initiative roll to combat")
+@app_commands.describe(roll="Your initiative roll (d20 + modifier)")
+async def add_initiative(interaction: discord.Interaction, roll: int):
+    """Add player initiative to combat"""
+    if not COMBAT_AVAILABLE:
+        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+        return
+    
+    user_id = str(interaction.user.id)
+    if user_id not in campaign_context["characters"]:
+        await interaction.response.send_message("❌ Register character first with `/character`!", ephemeral=True)
+        return
+    
+    combat = get_combat_integration()
+    if combat:
+        combat.add_player_to_combat(interaction.channel.id, user_id, roll)
+        
+        char_name = campaign_context["players"][user_id]["character_data"]["name"]
+        await interaction.response.send_message(f"✅ {char_name} added to initiative with {roll}!")
+
+@bot.tree.command(name="end_combat", description="End current combat (Admin only)")
+async def end_combat_command(interaction: discord.Interaction):
+    """End combat"""
+    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    if not COMBAT_AVAILABLE:
+        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+        return
+    
+    combat = get_combat_integration()
+    if combat:
+        result = await combat.end_combat(interaction.channel.id)
+        if result:
+            await interaction.response.send_message(f"✅ Combat ended! Lasted {result['rounds']} rounds.")
+        else:
+            await interaction.response.send_message("❌ No active combat found!")
 
 @bot.tree.command(name="combat_status", description="View current combat status")
-async def view_combat_status_simple(interaction: discord.Interaction):
-    """Simple combat status display"""
+async def view_combat_status(interaction: discord.Interaction):
+    """View combat status without separate display"""
+    if not COMBAT_AVAILABLE:
+        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+        return
     
-    if not combat_state["active"]:
+    combat = get_combat_integration()
+    if not combat:
+        await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+        return
+    
+    combat_manager = combat.get_combat_manager(interaction.channel.id)
+    
+    if not combat_manager.is_active():
         embed = discord.Embed(
             title="⚔️ Combat Status",
             description="No active combat.",
@@ -2143,75 +2236,26 @@ async def view_combat_status_simple(interaction: discord.Interaction):
         
         embed.add_field(
             name="💡 Starting Combat",
-            value="Combat will start automatically when you take hostile actions or encounter enemies!\n\nJust use `/action` to describe what you do - Donnie will handle the rest with Continue buttons.",
+            value="Combat will start automatically when you take hostile actions or encounter enemies!\n\nJust use `/action` to describe what you do - Donnie will handle the rest with auto-updating displays.",
             inline=False
         )
         
         embed.add_field(
-            name="⚡ Streamlined Features",
-            value="• **Auto-Detection**: Combat triggers based on your actions\n• **Continue Buttons**: Anyone can advance the story\n• **Fast Responses**: Under 700 characters for speed\n• **Simple Tracking**: Essential combat info only",
+            name="⚡ Enhanced Combat Features",
+            value="• **Auto-Detection**: Combat triggers based on your actions\n• **Continue Buttons**: Anyone can advance the story\n• **Separate Displays**: Auto-updating combat status messages\n• **Initiative Tracking**: Automatic turn order management\n• **Position Tracking**: Distances and battlefield positions",
             inline=False
         )
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    embed = discord.Embed(
-        title="⚔️ Combat Active",
-        description=f"**Round {combat_state['round']}**",
-        color=0xFF4500
-    )
+    # Show basic status
+    status = f"Round {combat_manager.round_number}"
+    current = combat_manager.get_current_combatant()
+    if current:
+        status += f" - {current.name}'s turn"
     
-    # Initiative order
-    if combat_state["initiative_order"]:
-        init_text = []
-        for i, (name, init) in enumerate(combat_state["initiative_order"]):
-            marker = "▶️" if i == combat_state["current_turn_index"] else "⏸️"
-            init_text.append(f"{marker} **{name}** ({init})")
-        
-        embed.add_field(
-            name="🎲 Initiative Order",
-            value="\n".join(init_text),
-            inline=False
-        )
-    
-    # Distances/Positions
-    if combat_state["distances"]:
-        distances_text = "\n".join([f"**{name}**: {pos}" for name, pos in combat_state["distances"].items()])
-        embed.add_field(
-            name="📍 Positions",
-            value=distances_text,
-            inline=False
-        )
-    
-    embed.add_field(
-        name="🎮 How to Play",
-        value="Use `/action` to describe what you want to do!\n\nDonnie will automatically handle combat flow with Continue buttons for faster gameplay.",
-        inline=False
-    )
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="end_combat", description="End combat (Admin only)")
-async def end_combat_simple(interaction: discord.Interaction):
-    """End combat - admin only"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
-    combat_state["active"] = False
-    combat_state["round"] = 1
-    combat_state["initiative_order"] = []
-    combat_state["current_turn_index"] = 0
-    combat_state["distances"] = {}
-    combat_state["enemy_count"] = 0
-    
-    embed = discord.Embed(
-        title="✅ Combat Ended",
-        description="Combat has been concluded by the DM.",
-        color=0x32CD32
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"⚔️ Combat Status: {status}")
 
 # ====== WORLD INFORMATION COMMANDS ======
 
@@ -2388,11 +2432,9 @@ async def get_last_scene(interaction: discord.Interaction):
         await interaction.response.send_message(f"❌ Error retrieving last scene: {e}", ephemeral=True)
 
 @bot.tree.command(name="clear_test_data", description="Clear all episodes and memories for testing (Admin only)")
-@app_commands.describe(
-    confirm="Type 'DELETE ALL DATA' to confirm deletion"
-)
+@app_commands.describe(confirm="Type 'DELETE ALL DATA' to confirm deletion")
 async def clear_test_data(interaction: discord.Interaction, confirm: str):
-    """Clear all test data (Admin only)"""
+    """Clear all test data (Admin only) - Fixed for foreign keys and column names"""
     if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
@@ -2402,11 +2444,6 @@ async def clear_test_data(interaction: discord.Interaction, confirm: str):
             title="⚠️ Confirmation Required",
             description="To delete all episodes and memories, use:\n`/clear_test_data confirm:DELETE ALL DATA`",
             color=0xFF4500
-        )
-        embed.add_field(
-            name="⚠️ WARNING",
-            value="This will permanently delete:\n• All episodes\n• All memories\n• All character progression\n• All session history",
-            inline=False
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
@@ -2424,58 +2461,96 @@ async def clear_test_data(interaction: discord.Interaction, confirm: str):
         campaign_context["episode_active"] = False
         campaign_context["episode_start_time"] = None
         
-        # Clear database data
         from database.database import get_db_connection
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Delete all data for this guild
-        tables_to_clear = [
-            "episodes",
-            "conversation_memories", 
-            "npc_memories",
-            "memory_consolidation",
-            "world_state",
-            "character_progression"
-        ]
+        # DISABLE foreign key checks temporarily
+        cursor.execute("PRAGMA foreign_keys = OFF")
         
         deleted_counts = {}
+        
+        # Function to inspect actual column names
+        def get_table_columns(table_name):
+            try:
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [row[1] for row in cursor.fetchall()]
+                return columns
+            except:
+                return []
+        
+        # Clear tables in order (episodes last due to foreign keys)
+        tables_to_clear = [
+            "conversation_memories", 
+            "npc_memories",
+            "memory_consolidation", 
+            "world_state",
+            "character_progression",
+            "character_snapshots",
+            "story_notes",
+            "episodes"  # LAST due to foreign keys
+        ]
+        
         for table in tables_to_clear:
             try:
-                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE campaign_id = ? OR guild_id = ?", (guild_id, guild_id))
-                count = cursor.fetchone()[0]
+                # Check if table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                if not cursor.fetchone():
+                    deleted_counts[table] = "Table not found"
+                    continue
                 
-                cursor.execute(f"DELETE FROM {table} WHERE campaign_id = ? OR guild_id = ?", (guild_id, guild_id))
-                deleted_counts[table] = count
+                # Get actual column names
+                columns = get_table_columns(table)
+                print(f"🔍 Table {table} columns: {columns}")
+                
+                # Find the right column to use
+                guild_column = None
+                if "guild_id" in columns:
+                    guild_column = "guild_id"
+                elif "campaign_id" in columns:
+                    guild_column = "campaign_id"
+                
+                if guild_column:
+                    # Count and delete
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {guild_column} = ?", (guild_id,))
+                    count = cursor.fetchone()[0]
+                    cursor.execute(f"DELETE FROM {table} WHERE {guild_column} = ?", (guild_id,))
+                    deleted_counts[table] = f"{count} (using {guild_column})"
+                    print(f"✅ Cleared {count} records from {table}")
+                else:
+                    deleted_counts[table] = f"No guild/campaign column found"
+                    print(f"⚠️ No suitable column found for {table}")
+                
             except Exception as e:
-                print(f"Error clearing {table}: {e}")
-                deleted_counts[table] = "Error"
+                deleted_counts[table] = f"Error: {str(e)}"
+                print(f"❌ Error clearing {table}: {e}")
         
+        # Re-enable foreign key checks
+        cursor.execute("PRAGMA foreign_keys = ON")
         conn.commit()
+        
+        # Reset scene to default
+        campaign_context["current_scene"] = "The village of Nightstone sits eerily quiet. Giant-sized boulders litter the village square, and not a soul can be seen moving in the streets. The party approaches the mysteriously open gates..."
         
         embed = discord.Embed(
             title="🗑️ Test Data Cleared Successfully",
-            description="All episodes and memories have been deleted.",
+            description="Foreign key constraints handled, scene reset to Nightstone.",
             color=0x32CD32
         )
         
-        for table, count in deleted_counts.items():
-            embed.add_field(
-                name=f"📊 {table.replace('_', ' ').title()}",
-                value=f"Deleted: {count}",
-                inline=True
-            )
-        
-        embed.add_field(
-            name="✅ Next Steps",
-            value="• Use `/start_episode` to begin fresh\n• Characters are preserved\n• Use `/set_scene` to set initial scene",
-            inline=False
-        )
+        for table, result in deleted_counts.items():
+            embed.add_field(name=f"📊 {table}", value=f"{result}", inline=True)
         
         await interaction.response.send_message(embed=embed)
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Error clearing data: {e}", ephemeral=True)
+        # Always re-enable foreign keys
+        try:
+            cursor.execute("PRAGMA foreign_keys = ON")
+            conn.commit()
+        except:
+            pass
+        await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
 @bot.tree.command(name="update_scene_from_response", description="Update scene based on last DM response (Admin only)")
 @app_commands.describe(new_scene="Description of where the party is now")
@@ -2655,6 +2730,7 @@ async def debug_memory(interaction: discord.Interaction):
         status_indicators.append("✅ Memory Operations Active" if conv_count > 0 else "⚠️ No Memories Stored")
         status_indicators.append("✅ Episode Active" if campaign_context.get("episode_active") else "⚠️ No Active Episode")
         status_indicators.append("✅ Persistent Memory Available" if PERSISTENT_MEMORY_AVAILABLE else "❌ Memory System Disabled")
+        status_indicators.append("✅ Combat System Available" if COMBAT_AVAILABLE else "❌ Combat System Disabled")
         
         embed.add_field(
             name="🔍 System Status",
@@ -2662,7 +2738,7 @@ async def debug_memory(interaction: discord.Interaction):
             inline=False
         )
         
-        embed.set_footer(text="Enhanced Memory System | Storm King's Thunder")
+        embed.set_footer(text="Enhanced Memory & Combat System | Storm King's Thunder")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
         
@@ -2676,14 +2752,20 @@ async def debug_memory(interaction: discord.Interaction):
 async def show_help(interaction: discord.Interaction):
     """Show comprehensive bot guide including TTS features, episode management, streamlined combat, and PDF uploads"""
     embed = discord.Embed(
-        title="⚡ Storm King's Thunder TTS Bot - ENHANCED MEMORY EDITION",
-        description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice, persistent memory, episode management, and streamlined combat with Continue buttons!",
+        title="⚡ Storm King's Thunder TTS Bot - ENHANCED MEMORY & COMBAT EDITION",
+        description="Your AI-powered D&D 5e adventure with Donnie the DM's optimized voice, persistent memory, episode management, and enhanced combat tracking!",
         color=0x4169E1
     )
     
     embed.add_field(
-        name="🧠 Enhanced Memory System (NEW!)",
+        name="🧠 Enhanced Memory System",
         value=f"{'✅ **ACTIVE** - Donnie remembers conversations, NPCs, and plot threads across episodes!' if PERSISTENT_MEMORY_AVAILABLE else '❌ **DISABLED** - Install enhanced_dm_system.py to enable persistent memory'}\n`/debug_memory` - Check memory system status (Admin)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⚔️ Enhanced Combat System (NEW!)",
+        value=f"{'✅ **ACTIVE** - Auto-updating combat displays with initiative, HP, and position tracking!' if COMBAT_AVAILABLE else '❌ **DISABLED** - Combat files not found'}\n`/combat_status` - View current combat\n`/initiative <roll>` - Add to combat\n`/end_combat` - End combat (Admin)",
         inline=False
     )
     
@@ -2696,12 +2778,6 @@ async def show_help(interaction: discord.Interaction):
     embed.add_field(
         name="📄 Character Upload",
         value="`/upload_character_sheet` - Upload PDF character sheet for auto-parsing\n`/character_sheet_help` - Get help with character sheet uploads\n`/character` - Manual character registration (alternative)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="⚡ STREAMLINED Combat (NEW!)",
-        value="`/combat_status` - View current combat and initiative\n`/end_combat` - End combat encounter (Admin only)\n**Auto-Combat**: Combat triggers automatically from your actions!\n**Continue Buttons**: Anyone can advance the story for faster gameplay!",
         inline=False
     )
     
@@ -2737,70 +2813,9 @@ async def show_help(interaction: discord.Interaction):
     
     embed.add_field(
         name="⚙️ Admin Commands",
-        value="`/set_scene` - Update current scene\n`/get_last_scene` - Load scene from last episode\n`/update_scene_from_response` - Update scene based on events\n`/clear_test_data` - Clear all episodes/memories (testing)\n`/cleanup_confirmations` - Clean up expired PDF confirmations\n`/end_combat` - End active combat encounter\n`/debug_memory` - Check memory system status",
-        inline=False
+        value="`/set_scene` - Update current scene\n`/get_last_scene` - Load scene from last episode\n`/update_scene_from_response` - Update scene based on events\n`/clear_test_data` - Clear all test data (Admin only)",
     )
-    
-    embed.add_field(
-        name="🌟 ENHANCED Memory Features Highlights",
-        value="• **🧠 Persistent Memory**: Donnie remembers across episodes and sessions\n• **👥 NPC Tracking**: Consistent personalities and relationships\n• **📊 Plot Threads**: Ongoing story elements tracked automatically\n• **🗺️ World State**: Location and faction changes persist\n• **🎬 Episode Consolidation**: Intelligent summaries of campaign progress\n• **Continue Buttons**: Anyone can advance the story for faster gameplay\n• **Under 700 Characters**: All responses optimized for speed\n• **PDF Character Sheets**: Upload and auto-parse any D&D character sheet\n• **Voice Integration**: All features work with Donnie's voice narration\n• **SMART Experience**: Persistent memory with streamlined gameplay speed!",
-        inline=False
-    )
-    
-    embed.set_footer(text="Donnie the DM awaits to guide your SMART, memory-enhanced, voice-enabled campaign adventure!")
-    await interaction.response.send_message(embed=embed)
-
-# ====== ENHANCED SYSTEM INITIALIZATION ======
-
-episode_commands = None
-character_progression = None
-enhanced_voice_manager = None
-
-if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
-    try:
-        episode_commands = EpisodeCommands(
-            bot=bot,
-            campaign_context=campaign_context,
-            voice_clients=voice_clients,
-            tts_enabled=tts_enabled,
-            add_to_voice_queue_func=add_to_voice_queue,
-            episode_operations=EpisodeOperations,
-            character_operations=CharacterOperations,
-            guild_operations=GuildOperations,
-            claude_client=claude_client,  # ✅ NEW: Pass claude_client to avoid circular import
-            sync_function=sync_campaign_context_with_database  # ✅ NEW: Pass sync function to avoid circular import
-        )
-        print("✅ Episode management system initialized with database support")
-    except Exception as e:
-        print(f"⚠️ Episode management initialization failed: {e}")
-        import traceback
-        traceback.print_exc()
-        episode_commands = None
-
-if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
-    try:
-        character_progression = CharacterProgressionCommands(
-            bot=bot,
-            campaign_context=campaign_context,
-            voice_clients=voice_clients,
-            tts_enabled=tts_enabled,
-            add_to_voice_queue_func=add_to_voice_queue,
-            character_operations=CharacterOperations,  # Correct parameter name
-            episode_operations=EpisodeOperations  # Correct parameter name
-        )
-        print("✅ Character progression system initialized with database support")
-    except Exception as e:
-        print(f"⚠️ Character progression initialization failed: {e}")
-        import traceback
-        traceback.print_exc()
-        character_progression = None
-else:
-    if not DATABASE_AVAILABLE:
-        print("⚠️ Character progression disabled: Database not available")
-    if not CHARACTER_PROGRESSION_AVAILABLE:
-        print("⚠️ Character progression disabled: Progression commands not available")
-
-# Initialize Enhanced Voice Manager - EXISTING
+    # Initialize Enhanced Voice Manager - EXISTING
 if ENHANCED_AUDIO_AVAILABLE:
     try:
         enhanced_voice_manager = EnhancedVoiceManager(
@@ -2817,31 +2832,25 @@ if ENHANCED_AUDIO_AVAILABLE:
         print(f"⚠️ Enhanced voice manager initialization failed: {e}")
         enhanced_voice_manager = None
 
-# Initialize PDF Character Sheet Commands - EXISTING
+# Initialize PDF Character Parser - NEW FEATURE
 try:
     from pdf_character_parser import PDFCharacterCommands
-    
-    pdf_character_commands = PDFCharacterCommands(
+    bot.pdf_character_commands = PDFCharacterCommands(
         bot=bot,
         campaign_context=campaign_context,
         claude_client=claude_client
     )
-    
-    # Store reference for cleanup command
-    bot.pdf_character_commands = pdf_character_commands  # type: ignore
-    
-    print("✅ PDF Character Sheet system initialized")
-    
+    print("✅ PDF character sheet parser initialized")
 except ImportError as e:
-    print(f"⚠️ PDF Character Sheet system not available: {e}")
-    print("Install required packages: pip install PyPDF2 pymupdf pillow")
+    print(f"⚠️ PDF character parser not available: {e}")
+    bot.pdf_character_commands = None
 except Exception as e:
-    print(f"❌ Error initializing PDF system: {e}")
+    print(f"⚠️ PDF character parser initialization failed: {e}")
+    bot.pdf_character_commands = None
 
-
-# Add helper function to update database when campaign context changes
+# Database health updates function
 def update_database_from_campaign_context(guild_id: str):
-    """Update database when campaign context changes"""
+    """Update database with current campaign context"""
     if not DATABASE_AVAILABLE:
         return
     
@@ -2857,26 +2866,56 @@ def update_database_from_campaign_context(guild_id: str):
         # Update guild settings including current scene
         guild_id_int = int(guild_id) if guild_id.isdigit() else None
         if guild_id_int:
-            GuildOperations.update_guild_settings(
-                guild_id,
-                voice_speed=voice_speed.get(guild_id_int, 1.25),
-                tts_enabled=tts_enabled.get(guild_id_int, False),
-                current_episode=campaign_context.get("current_episode", 0),
-                current_scene=campaign_context.get("current_scene", "")
-            )
-        
+            # Update guild settings with current voice preferences
+            settings_update = {
+                'voice_speed': voice_speed.get(guild_id_int, 1.25),
+                'tts_enabled': tts_enabled.get(guild_id_int, False),
+                'current_scene': campaign_context.get("current_scene", ""),
+                'current_episode': campaign_context.get("current_episode", 0)
+            }
+            
+            GuildOperations.update_guild_settings(guild_id, **settings_update)
+            print(f"✅ Updated database settings for guild {guild_id}")
     except Exception as e:
-        print(f"⚠️ Failed to update database: {e}")
+        print(f"⚠️ Failed to update database from campaign context: {e}")
 
-print("🎲 Storm King's Thunder TTS bot with ENHANCED MEMORY SYSTEM ready!")
-print("🔗 Database integration: " + ("✅ Active" if DATABASE_AVAILABLE else "❌ Disabled"))
-print("🧠 Persistent memory: " + ("✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"))
-print("📺 Episode management: " + ("✅ Active" if episode_commands else "❌ Disabled"))
-print("📈 Character progression: " + ("✅ Active" if character_progression else "❌ Disabled"))
-print("🎤 Enhanced voice: " + ("✅ Active" if enhanced_voice_manager else "❌ Disabled"))
-print("⚡ Streamlined combat: ✅ Active")
-print("▶️ Continue buttons: ✅ Active")
+# Configure performance mode for optimal gameplay
+configure_performance_mode(fast_mode=True)  # Enable fast mode by default
 
+# Final system status report
+def print_system_status():
+    """Print comprehensive system status on startup"""
+    print("\n" + "="*60)
+    print("🎲 STORM KING'S THUNDER BOT - SYSTEM STATUS")
+    print("="*60)
+    
+    print(f"🗃️  Database: {'✅ Active' if DATABASE_AVAILABLE else '❌ Disabled'}")
+    print(f"📺 Episodes: {'✅ Active' if episode_commands else '❌ Disabled'}")
+    print(f"📈 Progression: {'✅ Active' if character_progression else '❌ Disabled'}")
+    print(f"🎤 Enhanced Voice: {'✅ Active' if enhanced_voice_manager else '❌ Disabled'}")
+    print(f"🧠 Persistent Memory: {'✅ Active' if PERSISTENT_MEMORY_AVAILABLE else '❌ Disabled'}")
+    print(f"⚔️  Enhanced Combat: {'✅ Active' if COMBAT_AVAILABLE else '❌ Disabled'}")
+    print(f"📄 PDF Parser: {'✅ Active' if hasattr(bot, 'pdf_character_commands') and bot.pdf_character_commands else '❌ Disabled'}")
+    
+    print("\n⚡ PERFORMANCE SETTINGS:")
+    print(f"   Memory Retrieval: {MAX_MEMORIES_FAST} items (fast mode)")
+    print(f"   Background Processing: {'✅ Enabled' if BACKGROUND_PROCESSING else '❌ Disabled'}")
+    print(f"   Response Length Limit: {MAX_RESPONSE_LENGTH} chars")
+    print(f"   Response Timeout: {RESPONSE_TIMEOUT}s")
+    
+    print("\n🎯 KEY FEATURES:")
+    print("   • Fast AI responses with Continue buttons")
+    print("   • Enhanced combat with auto-updating displays")
+    print("   • Persistent memory across episodes")
+    print("   • PDF character sheet auto-parsing")
+    print("   • Voice narration with optimized TTS")
+    print("   • Episode management with recaps")
+    print("   • Character progression tracking")
+    
+    print("\n🚀 Ready for enhanced D&D adventures!")
+    print("="*60 + "\n")
+
+# Run the bot
 if __name__ == "__main__":
     # Check for required dependencies
     print("🔍 Checking dependencies...")
@@ -2980,3 +3019,4 @@ if __name__ == "__main__":
                 print("✅ Cleanup completed")
             except:
                 pass
+        print("🛑 Bot stopped")
