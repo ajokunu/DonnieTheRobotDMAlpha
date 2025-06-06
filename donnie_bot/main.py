@@ -25,6 +25,37 @@ MAX_MEMORIES_FULL = 10  # Full memory retrieval when needed
 BACKGROUND_PROCESSING = True  # Process memories after response sent
 MAX_RESPONSE_LENGTH = 450  # Shorter responses for faster TTS
 RESPONSE_TIMEOUT = 8.0  # Maximum time to wait for Claude response
+
+# ====== FFMPEG AVAILABILITY CHECK ======
+FFMPEG_AVAILABLE = False
+try:
+    import subprocess
+    subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    FFMPEG_AVAILABLE = True
+    print("✅ FFmpeg detected")
+except:
+    print("❌ FFmpeg not found - voice features will be disabled")
+
+# ====== HELPER FUNCTIONS FOR SAFE TYPE CHECKING ======
+def is_user_in_voice(interaction: discord.Interaction) -> bool:
+    """Safely check if user is in voice channel"""
+    return (isinstance(interaction.user, discord.Member) and 
+            interaction.user.voice is not None and 
+            interaction.user.voice.channel is not None)
+
+def is_admin(interaction: discord.Interaction) -> bool:
+    """Safely check if user is admin"""
+    return (isinstance(interaction.user, discord.Member) and 
+            interaction.user.guild_permissions.administrator)
+
+def get_voice_channel(interaction: discord.Interaction):
+    """Safely get user's voice channel"""
+    if not isinstance(interaction.user, discord.Member):
+        return None
+    if not interaction.user.voice:
+        return None
+    return interaction.user.voice.channel
+
 # ====== SYSTEM VARIABLE INITIALIZATION ======
 episode_commands = None
 character_progression = None
@@ -1198,12 +1229,8 @@ async def on_ready():
     print('🔄 Syncing slash commands...')
     
     # Check for FFmpeg
-    import subprocess
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        print("✅ FFmpeg detected")
-    except:
-        print("⚠️ FFmpeg not found - required for voice features")
+    if not FFMPEG_AVAILABLE:
+        print("⚠️ FFmpeg not found - voice features disabled")
         
     try:
         synced = await bot.tree.sync()
@@ -1218,7 +1245,8 @@ async def on_ready():
             "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
             "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
             "Continue Buttons": "✅",
-            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌"
+            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌",
+            "FFmpeg (Voice)": "✅" if FFMPEG_AVAILABLE else "❌"
         }
         
         print("🎲 Storm King's Thunder Bot Feature Status:")
@@ -1311,33 +1339,83 @@ async def on_message(message):
 
 @bot.tree.command(name="join_voice", description="Donnie joins your voice channel to narrate the adventure")
 async def join_voice_channel(interaction: discord.Interaction):
-    """Join the user's voice channel"""
-    if not hasattr(interaction.user, 'voice') or not interaction.user.voice:
+    """Join the user's voice channel with comprehensive error handling"""
+    
+    # Check FFmpeg first
+    if not FFMPEG_AVAILABLE:
+        await interaction.response.send_message("❌ FFmpeg is not installed! Voice features require FFmpeg to be installed on the system.", ephemeral=True)
+        return
+    
+    # Check if in guild and user is member
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+    
+    # Check if user is in voice channel
+    if not is_user_in_voice(interaction):
         await interaction.response.send_message("❌ You need to be in a voice channel first!", ephemeral=True)
         return
     
+    # Check if campaign is started
     if not campaign_context.get("session_started", False) and not campaign_context.get("episode_active", False):
         await interaction.response.send_message("❌ Start the campaign first with `/start` or `/start_episode`!", ephemeral=True)
         return
     
-    voice_channel = interaction.user.voice.channel
+    voice_channel = get_voice_channel(interaction)
     if not voice_channel:
         await interaction.response.send_message("❌ Could not access your voice channel!", ephemeral=True)
         return
+    
+    # Check bot permissions
+    bot_member = interaction.guild.get_member(bot.user.id)
+    if not bot_member:
+        await interaction.response.send_message("❌ Bot member not found in guild!", ephemeral=True)
+        return
         
-    guild_id = interaction.guild.id if interaction.guild else 0
+    channel_perms = voice_channel.permissions_for(bot_member)
+    if not channel_perms.connect:
+        await interaction.response.send_message("❌ I don't have permission to join that voice channel!", ephemeral=True)
+        return
+    
+    if not channel_perms.speak:
+        await interaction.response.send_message("❌ I don't have permission to speak in that voice channel!", ephemeral=True)
+        return
+        
+    guild_id = interaction.guild.id
     
     try:
-        # Leave existing voice channel if connected
-        if guild_id in voice_clients and voice_clients[guild_id].is_connected():
-            await voice_clients[guild_id].disconnect()
+        # Clean up existing connection
+        if guild_id in voice_clients:
+            try:
+                if voice_clients[guild_id].is_connected():
+                    await voice_clients[guild_id].disconnect()
+            except Exception as cleanup_error:
+                print(f"Warning: Error during voice cleanup: {cleanup_error}")
+            finally:
+                del voice_clients[guild_id]
         
-        # Join new voice channel
-        voice_client = await voice_channel.connect()
+        # Attempt to join with timeout
+        try:
+            voice_client = await asyncio.wait_for(
+                voice_channel.connect(), 
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            await interaction.response.send_message("❌ Timed out joining voice channel! Channel might be full or there may be network issues.", ephemeral=True)
+            return
+        except discord.ClientException as e:
+            await interaction.response.send_message(f"❌ Connection error: {e}", ephemeral=True)
+            return
+        except discord.opus.OpusNotLoaded:
+            await interaction.response.send_message("❌ Voice codec not loaded! Bot configuration issue.", ephemeral=True)
+            return
+        
+        # Store voice client
         voice_clients[guild_id] = voice_client
         tts_enabled[guild_id] = True
         voice_speed[guild_id] = 1.25  # Default faster speed for gameplay
         
+        # Success embed
         embed = discord.Embed(
             title="🎤 Donnie the DM Joins!",
             description=f"*Donnie's expressive Fable voice echoes through {voice_channel.name}*",
@@ -1372,7 +1450,7 @@ async def join_voice_channel(interaction: discord.Interaction):
         
         await interaction.response.send_message(embed=embed)
         
-        # Welcome message in voice
+        # Test voice with welcome message
         welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign with streamlined combat and continue buttons for faster gameplay."
         if PERSISTENT_MEMORY_AVAILABLE:
             welcome_text += " I'll also remember your adventures across episodes!"
@@ -1383,11 +1461,39 @@ async def join_voice_channel(interaction: discord.Interaction):
         await add_to_voice_queue(guild_id, welcome_text, "Donnie")
         
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to join voice channel: {str(e)}", ephemeral=True)
+        # Clean up on error
+        if guild_id in voice_clients:
+            try:
+                await voice_clients[guild_id].disconnect()
+                del voice_clients[guild_id]
+            except:
+                pass
+        
+        error_msg = f"❌ Failed to join voice channel: {str(e)}"
+        
+        # Specific error help
+        if "opus" in str(e).lower():
+            error_msg += "\n💡 Voice codec issue - try restarting the bot."
+        elif "permission" in str(e).lower():
+            error_msg += "\n💡 Check bot permissions in voice channel."
+        elif "timeout" in str(e).lower():
+            error_msg += "\n💡 Connection timeout - channel might be full."
+        
+        try:
+            await interaction.response.send_message(error_msg, ephemeral=True)
+        except:
+            try:
+                await interaction.followup.send(error_msg, ephemeral=True)
+            except:
+                print(f"Failed to send error message: {error_msg}")
 
 @bot.tree.command(name="leave_voice", description="Donnie leaves the voice channel")
 async def leave_voice_channel(interaction: discord.Interaction):
     """Leave the voice channel"""
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
     guild_id = interaction.guild.id
     
     if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
@@ -1423,6 +1529,10 @@ async def leave_voice_channel(interaction: discord.Interaction):
 @bot.tree.command(name="mute_donnie", description="Mute Donnie's voice (stay in channel)")
 async def mute_tts(interaction: discord.Interaction):
     """Disable TTS while staying in voice channel"""
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
     guild_id = interaction.guild.id
     
     if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
@@ -1448,6 +1558,10 @@ async def mute_tts(interaction: discord.Interaction):
 @bot.tree.command(name="unmute_donnie", description="Unmute Donnie's voice")
 async def unmute_tts(interaction: discord.Interaction):
     """Re-enable TTS in voice channel"""
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
     guild_id = interaction.guild.id
     
     if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
@@ -1471,7 +1585,11 @@ voice_quality = {}  # Guild ID -> "speed" or "quality"
 @app_commands.describe(speed="Speaking speed (0.5 = very slow, 1.0 = normal, 1.5 = fast, 2.0 = very fast)")
 async def adjust_voice_speed(interaction: discord.Interaction, speed: float):
     """Adjust TTS speaking speed"""
-    guild_id = interaction.guild.id if interaction.guild else 0
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+        return
+        
+    guild_id = interaction.guild.id
     
     if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
         await interaction.response.send_message("❌ Donnie isn't in a voice channel! Use `/join_voice` first.", ephemeral=True)
@@ -2233,7 +2351,7 @@ async def add_initiative(interaction: discord.Interaction, roll: int):
 @bot.tree.command(name="end_combat", description="End current combat (Admin only)")
 async def end_combat_command(interaction: discord.Interaction):
     """End combat"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
     
@@ -2396,34 +2514,35 @@ async def show_campaign_info(interaction: discord.Interaction):
 @app_commands.describe(scene_description="The new scene description")
 async def set_scene(interaction: discord.Interaction, scene_description: str):
     """Update current scene (Admin only)"""
-    if hasattr(interaction.user, 'guild_permissions') and interaction.user.guild_permissions.administrator:
-        campaign_context["current_scene"] = scene_description
-        
-        # Also update in database if available
-        if DATABASE_AVAILABLE:
-            try:
-                guild_id = str(interaction.guild.id)
-                GuildOperations.update_guild_settings(
-                    guild_id,
-                    current_scene=scene_description
-                )
-                print(f"✅ Scene updated in database for guild {guild_id}")
-            except Exception as e:
-                print(f"⚠️ Failed to update scene in database: {e}")
-        
-        embed = discord.Embed(
-            title="🏛️ Scene Updated",
-            description=scene_description,
-            color=0x4169E1
-        )
-        await interaction.response.send_message(embed=embed)
-    else:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Only server administrators can update scenes!", ephemeral=True)
+        return
+        
+    campaign_context["current_scene"] = scene_description
+    
+    # Also update in database if available
+    if DATABASE_AVAILABLE and interaction.guild:
+        try:
+            guild_id = str(interaction.guild.id)
+            GuildOperations.update_guild_settings(
+                guild_id,
+                current_scene=scene_description
+            )
+            print(f"✅ Scene updated in database for guild {guild_id}")
+        except Exception as e:
+            print(f"⚠️ Failed to update scene in database: {e}")
+    
+    embed = discord.Embed(
+        title="🏛️ Scene Updated",
+        description=scene_description,
+        color=0x4169E1
+    )
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="get_last_scene", description="Retrieve scene from last episode (Admin only)")
 async def get_last_scene(interaction: discord.Interaction):
     """Get scene from the last episode"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
     
@@ -2471,7 +2590,7 @@ async def get_last_scene(interaction: discord.Interaction):
 @app_commands.describe(confirm="Type 'DELETE ALL DATA' to confirm deletion")
 async def clear_test_data(interaction: discord.Interaction, confirm: str):
     """Clear all test data (Admin only) - Fixed for foreign keys and column names"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
     
@@ -2592,7 +2711,7 @@ async def clear_test_data(interaction: discord.Interaction, confirm: str):
 @app_commands.describe(new_scene="Description of where the party is now")
 async def update_scene_from_response(interaction: discord.Interaction, new_scene: str):
     """Update the current scene based on recent events"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
     
@@ -2600,7 +2719,7 @@ async def update_scene_from_response(interaction: discord.Interaction, new_scene
     campaign_context["current_scene"] = new_scene
     
     # Update in database if available
-    if DATABASE_AVAILABLE:
+    if DATABASE_AVAILABLE and interaction.guild:
         try:
             guild_id = str(interaction.guild.id)
             
@@ -2629,7 +2748,7 @@ async def update_scene_from_response(interaction: discord.Interaction, new_scene
 @bot.tree.command(name="cleanup_confirmations", description="Clean up expired character sheet confirmations (Admin only)")
 async def cleanup_confirmations(interaction: discord.Interaction):
     """Clean up expired confirmations (Admin only)"""
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Only server administrators can use this command!", ephemeral=True)
         return
     
@@ -2662,7 +2781,7 @@ async def cleanup_confirmations(interaction: discord.Interaction):
 async def debug_memory(interaction: discord.Interaction):
     """Debug command to verify memory system functionality"""
     
-    if not hasattr(interaction.user, 'guild_permissions') or not interaction.user.guild_permissions.administrator:
+    if not is_admin(interaction):
         await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         return
     
@@ -2850,13 +2969,19 @@ async def show_help(interaction: discord.Interaction):
     embed.add_field(
         name="⚙️ Admin Commands",
         value="`/set_scene` - Update current scene\n`/get_last_scene` - Load scene from last episode\n`/update_scene_from_response` - Update scene based on events\n`/clear_test_data` - Clear all test data (Admin only)",
+        inline=False
     )
-    # Initialize Enhanced Voice Manager - EXISTING
+    
+    await interaction.response.send_message(embed=embed)
+
+# ====== INITIALIZATION SECTION ======
+
+# Initialize Enhanced Voice Manager - EXISTING
 if ENHANCED_AUDIO_AVAILABLE:
     try:
         enhanced_voice_manager = EnhancedVoiceManager(
             claude_client=claude_client,
-            openai_api_key=os.getenv('OPENAI_API_KEY')
+            openai_api_key=os.getenv('OPENAI_API_KEY') or ""
         )
         
         # Connect the voice manager functions to the streamlined implementations
@@ -2932,6 +3057,7 @@ def print_system_status():
     print(f"🧠 Persistent Memory: {'✅ Active' if PERSISTENT_MEMORY_AVAILABLE else '❌ Disabled'}")
     print(f"⚔️  Enhanced Combat: {'✅ Active' if COMBAT_AVAILABLE else '❌ Disabled'}")
     print(f"📄 PDF Parser: {'✅ Active' if getattr(bot, 'pdf_character_commands', None) else '❌ Disabled'}")
+    print(f"🎵 FFmpeg (Voice): {'✅ Active' if FFMPEG_AVAILABLE else '❌ Disabled'}")
     
     print("\n⚡ PERFORMANCE SETTINGS:")
     print(f"   Memory Retrieval: {MAX_MEMORIES_FAST} items (fast mode)")
@@ -2947,6 +3073,7 @@ def print_system_status():
     print("   • Voice narration with optimized TTS")
     print("   • Episode management with recaps")
     print("   • Character progression tracking")
+    print("   • Safe User/Member type checking for voice")
     
     print("\n🚀 Ready for enhanced D&D adventures!")
     print("="*60 + "\n")
@@ -2962,14 +3089,7 @@ if __name__ == "__main__":
         print("❌ Install discord.py[voice]: pip install discord.py[voice]")
         exit(1)
     
-    # Check for FFmpeg (required for voice)
-    import subprocess
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        print("✅ FFmpeg detected")
-    except:
-        print("⚠️ FFmpeg not found - required for voice features")
-        print("Install FFmpeg: https://ffmpeg.org/download.html")
+    # FFmpeg already checked at top of file
     
     # Check for PDF dependencies
     try:
@@ -2995,6 +3115,14 @@ if __name__ == "__main__":
     print("🎯 No heavy AI systems - optimized for speed and responsiveness!")
     print("▶️ Continue buttons allow anyone to advance the story for faster gameplay")
     print("🚀 All responses under 700 characters for maximum speed")
+    
+    # Voice system status
+    if FFMPEG_AVAILABLE:
+        print("✅ VOICE SYSTEM: FFmpeg detected - voice features enabled")
+        print("🎤 Features: Safe Member/User checking, proper error handling, timeout protection")
+    else:
+        print("❌ VOICE SYSTEM: FFmpeg not found - voice features disabled")
+        print("Install FFmpeg from https://ffmpeg.org/download.html")
     
     # GET THE DISCORD TOKEN
     print("🔑 Checking Discord token...")
@@ -3027,6 +3155,9 @@ if __name__ == "__main__":
         print(f"❌ Error checking token: {e}")
         input("Press Enter to exit...")
         exit(1)
+    
+    # Print comprehensive system status
+    print_system_status()
     
     # TRY TO START THE BOT WITH FULL ERROR HANDLING
     print("🚀 Starting Discord bot...")
