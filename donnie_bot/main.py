@@ -23,7 +23,7 @@ load_dotenv()
 MAX_MEMORIES_FAST = 2  # Limited memory retrieval for speed
 MAX_MEMORIES_FULL = 10  # Full memory retrieval when needed
 BACKGROUND_PROCESSING = True  # Process memories after response sent
-MAX_RESPONSE_LENGTH = 450  # Shorter responses for faster TTS
+MAX_RESPONSE_LENGTH = 650  # Shorter responses for faster TTS
 RESPONSE_TIMEOUT = 8.0  # Maximum time to wait for Claude response
 
 # ====== FFMPEG AVAILABILITY CHECK ======
@@ -92,7 +92,6 @@ class MemoryDatabaseAdapter:
 # ====== SYSTEM VARIABLE INITIALIZATION ======
 episode_commands = None
 character_progression = None
-enhanced_voice_manager = None
 
 
 
@@ -245,41 +244,6 @@ campaign_context = {
     "guild_id": None,  # Track which Discord server this campaign belongs to
 }
 
-# NEW STREAMLINED PROMPT
-STREAMLINED_DM_PROMPT = """You are Donnie, DM for Storm King's Thunder D&D 5e 2024.
-
-SETTING: {setting}
-CURRENT SCENE: {current_scene}
-PARTY: {characters}
-COMBAT STATUS: {combat_info}
-
-**CRITICAL COMBAT RULES:**
-- If combat is active, ALWAYS state: Round, whose turn, initiative order
-- Track distances between characters and enemies precisely
-- Never forget who is in combat or their positions
-- Keep responses under 700 characters
-
-**CURRENT DISTANCES & POSITIONS:**
-{distances}
-
-PLAYER ACTION: {player_input}
-
-PARTY COMPOSITION: Use the character information provided to personalize your responses. Address characters by name and reference their classes, backgrounds, and details when appropriate.
-
-DM GUIDELINES:
-- You are fair but challenging - not too easy, not too harsh
-- Giants should feel massive and threatening when encountered
-- Use vivid descriptions of the Sword Coast setting
-- Reference character abilities and backgrounds in your responses
-- Ask for dice rolls when appropriate (D&D 5e 2024 rules)
-- Keep responses 2-4 sentences for real-time play
-- Make player choices matter and have consequences
-- Create immersive roleplay opportunities
-- Address characters by their names when possible
-
-Respond as Donnie (under 700 chars, track combat precisely):"""
-
-# Continue Button View Class
 class ContinueView(discord.ui.View):
     def __init__(self, original_user_id: str):
         super().__init__(timeout=300)  # 5 minute timeout
@@ -980,7 +944,6 @@ async def on_ready():
             "Unified Response System": "✅" if UNIFIED_RESPONSE_AVAILABLE else "❌",
             "Episodes": "✅" if episode_commands else "❌",
             "Progression": "✅" if character_progression else "❌",
-            "Enhanced Voice": "✅" if enhanced_voice_manager else "❌",
             "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
             "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
             "Continue Buttons": "✅",
@@ -2789,23 +2752,6 @@ async def show_help(interaction: discord.Interaction):
 
 # ====== INITIALIZATION SECTION ======
 
-# Initialize Enhanced Voice Manager - EXISTING
-if ENHANCED_AUDIO_AVAILABLE:
-    try:
-        enhanced_voice_manager = EnhancedVoiceManager(
-            claude_client=claude_client,
-            openai_api_key=os.getenv('OPENAI_API_KEY') or ""
-        )
-        
-        # Connect the voice manager functions to the streamlined implementations
-        enhanced_voice_manager._get_claude_response = get_streamlined_claude_response
-        enhanced_voice_manager._generate_tts_audio = generate_tts_audio
-        
-        print("✅ Enhanced voice manager initialized with streamlined responses")
-    except Exception as e:
-        print(f"⚠️ Enhanced voice manager initialization failed: {e}")
-        enhanced_voice_manager = None
-
 # Initialize PDF Character Parser - NEW FEATURE
 try:
     from pdf_character_parser import PDFCharacterCommands
@@ -2866,7 +2812,6 @@ def print_system_status():
     print(f"🗃️  Database: {'✅ Active' if DATABASE_AVAILABLE else '❌ Disabled'}")
     print(f"📺 Episodes: {'✅ Active' if episode_commands else '❌ Disabled'}")
     print(f"📈 Progression: {'✅ Active' if character_progression else '❌ Disabled'}")
-    print(f"🎤 Enhanced Voice: {'✅ Active' if enhanced_voice_manager else '❌ Disabled'}")
     print(f"🧠 Persistent Memory: {'✅ Active' if PERSISTENT_MEMORY_AVAILABLE else '❌ Disabled'}")
     print(f"⚔️  Enhanced Combat: {'✅ Active' if COMBAT_AVAILABLE else '❌ Disabled'}")
     print(f"📄 PDF Parser: {'✅ Active' if getattr(bot, 'pdf_character_commands', None) else '❌ Disabled'}")

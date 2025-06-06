@@ -178,8 +178,8 @@ class UnifiedDMResponseSystem:
             None,
             lambda: self.claude_client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=min(180, self.max_response_length // 3),
-                temperature=0.7,
+                max_tokens=min(300, self.max_response_length // 3),
+                temperature=0.8,
                 messages=[{"role": "user", "content": prompt}]
             )
         )
@@ -224,30 +224,38 @@ class UnifiedDMResponseSystem:
             ])
         
         # Build streamlined prompt
-        prompt = f"""You are Donnie, experienced DM for Storm King's Thunder D&D 5e 2024.
+        # Build streamlined prompt (fix f-string backslash issue)
+        recent_context_section = f"**RECENT CONTEXT**:\n{recent_context}" if recent_context else ""
 
-**SETTING**: {self.campaign_prompts['setting_context']}
+        prompt = f"""You are AlphaDonnie, experienced DM for Storm King's Thunder D&D 5e 2024.
 
-**CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:300]}
+                **SETTING**: {self.campaign_prompts['setting_context']}
 
-**PARTY**: {', '.join(party_info)}
+                **CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:500]}
 
-**THREAT LEVEL**: {self.campaign_prompts['threat_level']}
+                **PARTY**: {', '.join(party_info)}
 
-{f"**RECENT CONTEXT**:\n{recent_context}" if recent_context else ""}
+                **THREAT LEVEL**: {self.campaign_prompts['threat_level']}
 
-**DM GUIDELINES**:
-- Follow D&D 5e 2024 rules precisely
-- Use current scene as starting point
-- Progress story naturally when players move or investigate
-- Ask for dice rolls when rules require them
-- Make consequences meaningful in this giant-threatened world
-- Keep responses under {self.max_response_length} characters
-- Create immersive, dramatic moments
+                {recent_context_section}
+                
+                **DM GUIDELINES**:
+                - Follow D&D 5th Edition 2024 rules precisely
+                - Use current scene as starting point
+                - Progress story naturally when players move or investigate
+                - Ask for dice rolls when rules require them
+                - Make consequences meaningful in this giant-threatened world
+                - Keep responses under {self.max_response_length} characters
+                - Create immersive, dramatic moments
+                - Be fair and consistent with rules and ensure players follow the 2024 ruleset
+                - NPCs should have distinct personalities and relationships shaped by the giant crisis
+                - Combat should be well defined, with clear turn order and actions. 
+                - Combat should be difficult but fair.
 
-**PLAYER ACTION**: {character_name}: {player_input}
+                **PLAYER ACTION**: {character_name}: {player_input}
 
-**DM RESPONSE** (under {self.max_response_length} chars, maintain epic tone):"""
+                **DM RESPONSE** (under {self.max_response_length} chars, maintain epic tone):
+                """
         
         # Single Claude API call
         response = await asyncio.get_event_loop().run_in_executor(
@@ -283,7 +291,7 @@ class UnifiedDMResponseSystem:
         base_context = f"""You are Donnie, DM for Storm King's Thunder D&D 5e 2024.
 
 **SETTING**: {self.campaign_prompts['setting_context']}
-**CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:300]}
+**CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:500]}
 **THREAT LEVEL**: {self.campaign_prompts['threat_level']}"""
         
         # Add party information

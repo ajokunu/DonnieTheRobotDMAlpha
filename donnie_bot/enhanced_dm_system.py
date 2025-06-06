@@ -552,8 +552,6 @@ class MockMemory:
 
 # ===== CONVENIENCE FUNCTIONS FOR BACKWARD COMPATIBILITY =====
 
-# These functions maintain compatibility with existing code that might import from enhanced_dm_system.py
-
 async def get_persistent_dm_response(*args, **kwargs):
     """
     Deprecated: Use unified_dm_response.generate_dm_response() instead
