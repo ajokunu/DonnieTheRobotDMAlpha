@@ -126,7 +126,7 @@ except ImportError as e:
 # Enhanced DM system imports - NEW PERSISTENT MEMORY SYSTEM!
 try:
     from enhanced_dm_system import get_persistent_dm_response, PersistentDMSystem
-    print("✅ Enhanced DM system with persistent memory imported successfully")
+    print("✅ Enhanced Memory System loaded!")
     PERSISTENT_MEMORY_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ Enhanced DM system with persistent memory not available: {e}")
@@ -135,7 +135,7 @@ except ImportError as e:
 # Combat system imports - NEW COMBAT INTEGRATION!
 try:
     from combat_system.combat_integration import initialize_combat_system, get_combat_integration
-    print("✅ Combat system imported successfully")
+    print("✅ STREAMLINED Combat System loaded!")
     COMBAT_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ Combat system not available: {e}")
@@ -262,6 +262,12 @@ def sync_campaign_context_with_database(guild_id: str):
         return
     
     try:
+        # ✅ FIXED: Ensure guild_id is string for database operations
+        if isinstance(guild_id, int):
+            guild_id = str(guild_id)
+        
+        print(f"🔄 Syncing campaign context for guild {guild_id}")
+        
         # Get current episode from database
         current_episode = EpisodeOperations.get_current_episode(guild_id)
         if current_episode:
@@ -279,12 +285,15 @@ def sync_campaign_context_with_database(guild_id: str):
         # Get guild settings including current scene
         guild_settings = GuildOperations.get_guild_settings(guild_id)
         if guild_settings:
-            # Convert guild_id to int for voice dictionaries
-            guild_id_int = int(guild_id) if guild_id.isdigit() else None
-            if guild_id_int:
-                # Sync voice settings with database
-                voice_speed[guild_id_int] = guild_settings.get('voice_speed', 1.25)
-                tts_enabled[guild_id_int] = guild_settings.get('tts_enabled', False)
+            # ✅ FIXED: Safe conversion to int for voice dictionaries
+            try:
+                guild_id_int = int(guild_id) if guild_id.isdigit() else None
+                if guild_id_int:
+                    # Sync voice settings with database
+                    voice_speed[guild_id_int] = guild_settings.get('voice_speed', 1.25)
+                    tts_enabled[guild_id_int] = guild_settings.get('tts_enabled', False)
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ Could not convert guild_id {guild_id} to int for voice settings: {e}")
             
             # Sync current scene if stored in database
             if 'current_scene' in guild_settings and guild_settings['current_scene']:
@@ -361,14 +370,28 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
     try:
         print(f"🚀 FAST Enhanced DM response for user {user_id} [OPTIMIZED VERSION ACTIVE]")
         
-        # Get guild ID for campaign identification
-        guild_id = campaign_context.get("guild_id", "storm_kings_thunder_default")
+        # ✅ FIXED: Better guild ID detection with debugging
+        guild_id_str = campaign_context.get("guild_id")
+        print(f"🔍 DEBUG: guild_id from campaign_context: {guild_id_str}")
+        print(f"🔍 DEBUG: Full campaign_context keys: {list(campaign_context.keys())}")
+        print(f"🔍 DEBUG: campaign_context players: {list(campaign_context.get('players', {}).keys())}")
+        
+        if not guild_id_str:
+            print("⚠️ No guild_id in campaign_context!")
+            print(f"🔍 DEBUG: campaign_context content: {campaign_context}")
+            guild_id_str = "storm_kings_thunder_default"
+        
+        # Ensure it's a string for memory operations
+        if isinstance(guild_id_str, int):
+            guild_id_str = str(guild_id_str)
+        
+        print(f"🔍 Using guild_id: {guild_id_str} (type: {type(guild_id_str)})")
         
         # Get current episode ID quickly
         episode_id = None
         if DATABASE_AVAILABLE:
             try:
-                current_episode = EpisodeOperations.get_current_episode(guild_id)
+                current_episode = EpisodeOperations.get_current_episode(guild_id_str)
                 episode_id = current_episode.id if current_episode else campaign_context.get("current_episode", 1)
             except Exception as e:
                 print(f"Quick episode lookup failed: {e}")
@@ -387,7 +410,7 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
                 # ⚡ OPTIMIZATION: Get only most relevant memories with aggressive timeout
                 recent_memories = await asyncio.wait_for(
                     dm_system.memory_ops.retrieve_relevant_memories(
-                        guild_id, player_input, max_memories=MAX_MEMORIES_FAST
+                        guild_id_str, player_input, max_memories=MAX_MEMORIES_FAST
                     ),
                     timeout=2.0  # 2 second timeout for memory retrieval
                 )
@@ -414,10 +437,21 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
         
         # 🎤 Play thinking sound while generating response (if voice enabled)
         try:
-            # Convert guild_id for voice system (voice_clients uses int keys)
-            guild_id_int = int(guild_id) if guild_id.isdigit() else int(campaign_context.get("guild_id", 0))
+            # ✅ FIXED: Safely convert guild_id for voice system
+            guild_id_int = None
+            if isinstance(guild_id_str, str) and guild_id_str.isdigit():
+                guild_id_int = int(guild_id_str)
+            elif isinstance(guild_id_str, int):
+                guild_id_int = guild_id_str
+            else:
+                # Try to get from campaign context as int
+                context_guild = campaign_context.get("guild_id")
+                if isinstance(context_guild, int):
+                    guild_id_int = context_guild
+                elif isinstance(context_guild, str) and context_guild.isdigit():
+                    guild_id_int = int(context_guild)
             
-            if (guild_id_int in voice_clients and 
+            if (guild_id_int and guild_id_int in voice_clients and 
                 voice_clients[guild_id_int].is_connected() and 
                 tts_enabled.get(guild_id_int, False)):
                 
@@ -439,7 +473,7 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
         if PERSISTENT_MEMORY_AVAILABLE and BACKGROUND_PROCESSING:
             print("🔥 Scheduling background memory processing...")
             asyncio.create_task(process_memories_background(
-                guild_id, episode_id, user_id, player_input, dm_response
+                guild_id_str, episode_id, user_id, player_input, dm_response
             ))
         
         print("✅ FAST Enhanced memory response completed")
@@ -543,13 +577,26 @@ async def process_memories_background(guild_id: str, episode_id: int, user_id: s
                                     player_input: str, dm_response: str):
     """🔥 BACKGROUND: Process and store memories WITHOUT blocking the response"""
     try:
-        print("🔥 Background memory processing started...")
+        print(f"🔥 Background memory processing started for guild {guild_id}, user {user_id}")
         
         # Small delay to ensure response is sent first
         await asyncio.sleep(0.3)
         
         if not PERSISTENT_MEMORY_AVAILABLE:
             print("⚠️ Background: Persistent memory not available")
+            return
+        
+        # ✅ FIXED: Validate parameters before proceeding
+        if not isinstance(guild_id, str):
+            print(f"❌ Background: Invalid guild_id type: {type(guild_id)}, value: {guild_id}")
+            return
+            
+        if not isinstance(user_id, str):
+            print(f"❌ Background: Invalid user_id type: {type(user_id)}, value: {user_id}")
+            return
+            
+        if user_id not in campaign_context["players"]:
+            print(f"❌ Background: User {user_id} not found in campaign context")
             return
         
         from enhanced_dm_system import PersistentDMSystem
@@ -559,6 +606,8 @@ async def process_memories_background(guild_id: str, episode_id: int, user_id: s
         player_data = campaign_context["players"][user_id]
         char_data = player_data["character_data"]
         character_name = char_data["name"]
+        
+        print(f"🔥 Background: Processing for character {character_name}")
         
         # 🔥 BACKGROUND: Store conversation memory with extended timeout
         try:
@@ -609,31 +658,12 @@ async def process_memories_background(guild_id: str, episode_id: int, user_id: s
         except Exception as e:
             print(f"⚠️ Background: NPC processing failed: {e}")
         
-        # 🔥 BACKGROUND: Update world state if location mentioned (check if method exists)
-        try:
-            locations = extract_locations_fast(dm_response + " " + player_input)
-            if locations and hasattr(dm_system.memory_ops, 'update_world_state') and callable(getattr(dm_system.memory_ops, 'update_world_state', None)):
-                current_location = locations[0]  # Take first location mentioned
-                await asyncio.wait_for(
-                    dm_system.memory_ops.update_world_state(
-                        campaign_id=guild_id,
-                        location_name=current_location,
-                        state_type="location",
-                        current_state="visited",
-                        episode_id=episode_id
-                    ),
-                    timeout=3.0
-                )
-                print(f"✅ Background: Updated location {current_location}")
-            elif locations:
-                print(f"⚠️ Background: Location {locations[0]} detected but update_world_state method not available")
-        except Exception as e:
-            print(f"⚠️ Background: Location update failed: {e}")
-        
         print("✅ Background memory processing completed")
         
     except Exception as e:
         print(f"❌ Background memory processing error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def extract_npc_names_fast(text: str) -> list:
     """FAST NPC name extraction using simple pattern matching"""
@@ -841,6 +871,20 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
                                                 player_name: str, guild_id: int,channel_id : int, voice_will_speak: bool):
     """Enhanced DM response processing with combat integration"""
     try:
+        # ✅ FIXED: Convert guild_id to string for database/memory operations
+        guild_id_str = str(guild_id)
+        
+        print(f"🔍 Background processing: guild_id={guild_id} (int), guild_id_str={guild_id_str} (str)")
+        print(f"🔍 DEBUG: campaign_context guild_id at start of background: {campaign_context.get('guild_id')}")
+        print(f"🔍 DEBUG: user_id being processed: {user_id}")
+        print(f"🔍 DEBUG: users in campaign_context: {list(campaign_context.get('players', {}).keys())}")
+        
+        # ✅ TEMPORARY FIX: Ensure guild_id is set in context for this background task
+        if campaign_context.get("guild_id") != guild_id_str:
+            print(f"⚠️ WARNING: campaign_context guild_id mismatch! Context: {campaign_context.get('guild_id')}, Expected: {guild_id_str}")
+            print(f"🔧 FIXING: Setting guild_id in campaign_context to {guild_id_str}")
+            campaign_context["guild_id"] = guild_id_str
+        
         # Use combat-aware response if available
         if COMBAT_AVAILABLE:
             combat = get_combat_integration()
@@ -976,6 +1020,11 @@ def optimize_text_for_tts(text: str) -> str:
 
 async def play_thinking_sound(guild_id: int, character_name: str):
     """Play a random DM thinking sound immediately to fill waiting time"""
+    # ✅ FIXED: Ensure guild_id is valid int
+    if not isinstance(guild_id, int) or guild_id <= 0:
+        print(f"⚠️ Invalid guild_id for thinking sound: {guild_id}")
+        return
+        
     if (guild_id not in voice_clients or 
         not voice_clients[guild_id].is_connected() or 
         not tts_enabled.get(guild_id, False)):
@@ -1685,9 +1734,12 @@ async def register_character(interaction: discord.Interaction,
     user_id = str(interaction.user.id)
     player_name = interaction.user.display_name
     
-    # Set guild_id in campaign context if not set
+    # ✅ FIXED: Set guild_id in campaign context if not set
     if campaign_context["guild_id"] is None:
-        campaign_context["guild_id"] = str(interaction.guild.id)
+        guild_id_int = interaction.guild.id
+        guild_id_str = str(guild_id_int)
+        campaign_context["guild_id"] = guild_id_str
+        print(f"✅ Set guild_id in campaign_context: {guild_id_str}")
     
     # Validate level
     if level < 1 or level > 20:
@@ -2084,6 +2136,18 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     print(f"🔍 DEBUG: Episode active = {campaign_context.get('episode_active', False)}")
     print(f"🔍 DEBUG: Using enhanced response = {PERSISTENT_MEMORY_AVAILABLE}")
     
+    # ✅ FIXED: Ensure guild_id is properly set in campaign context
+    guild_id_int = interaction.guild.id  # This is an int from Discord
+    guild_id_str = str(guild_id_int)     # Convert to string for database operations
+    
+    # Update campaign context with current guild_id - ADD MORE DEBUGGING
+    print(f"🔍 DEBUG: Setting guild_id in campaign_context: {guild_id_str}")
+    print(f"🔍 DEBUG: campaign_context before update: {campaign_context.get('guild_id')}")
+    campaign_context["guild_id"] = guild_id_str
+    print(f"🔍 DEBUG: campaign_context after update: {campaign_context.get('guild_id')}")
+    
+    print(f"🔍 DEBUG: Action command - guild_id_int: {guild_id_int}, guild_id_str: {guild_id_str}")
+    
     # Quick validation
     if user_id not in campaign_context["characters"]:
         embed = discord.Embed(
@@ -2125,12 +2189,11 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
         inline=False
     )
     
-    # Voice status
-    guild_id = interaction.guild.id
+    # Voice status - use int guild_id for voice operations
     channel_id = interaction.channel_id if interaction.channel_id is not None else 0
-    voice_will_speak = (guild_id in voice_clients and 
-                       voice_clients[guild_id].is_connected() and 
-                       tts_enabled.get(guild_id, False))
+    voice_will_speak = (guild_id_int in voice_clients and 
+                       voice_clients[guild_id_int].is_connected() and 
+                       tts_enabled.get(guild_id_int, False))
 
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
@@ -2147,9 +2210,11 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     await interaction.response.send_message(embed=embed)
     message = await interaction.original_response()
     
-    # Process in background using enhanced system
+    # ✅ FIXED: Pass correct guild_id types for different systems
     asyncio.create_task(process_enhanced_dm_response_background(
-        user_id, what_you_do, message, character_name, char_data, player_name, guild_id, channel_id, voice_will_speak
+        user_id, what_you_do, message, character_name, char_data, player_name, 
+        guild_id_int,  # Voice system needs int
+        channel_id, voice_will_speak
     ))
 
 @bot.tree.command(name="roll", description="Roll dice for your Storm King's Thunder adventure")
