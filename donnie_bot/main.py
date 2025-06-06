@@ -845,9 +845,28 @@ async def process_enhanced_dm_response_background(user_id: str, player_input: st
         if COMBAT_AVAILABLE:
             combat = get_combat_integration()
             if combat:
-                dm_response, combat_context = combat.process_action_with_combat(
-                    user_id, player_input, channel_id
-                )
+                try:
+                    # Safely handle the async call with proper error handling
+                    result = await combat.process_action_with_combat(
+                        user_id, player_input, channel_id
+                    )
+                    
+                    # Handle different possible return types
+                    if isinstance(result, tuple) and len(result) == 2:
+                        dm_response, combat_context = result
+                    elif isinstance(result, str):
+                        # If it just returns a string response
+                        dm_response = result
+                        combat_context = None
+                    else:
+                        # Fallback if unexpected return type
+                        print(f"⚠️ Unexpected combat result type: {type(result)}")
+                        dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
+                        
+                except Exception as combat_error:
+                    print(f"⚠️ Combat integration error: {combat_error}")
+                    # Fallback to regular DM response if combat fails
+                    dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
             else:
                 dm_response = await get_enhanced_claude_dm_response(user_id, player_input)
         else:

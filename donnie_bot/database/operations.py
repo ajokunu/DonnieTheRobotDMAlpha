@@ -241,6 +241,41 @@ class EpisodeOperations:
             raise DatabaseOperationError(f"Failed to get episode history: {e}")
     
     @staticmethod
+    def get_last_completed_episode(guild_id: str) -> Optional[Episode]:
+        """Get the most recently completed episode for a guild"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM episodes 
+                WHERE guild_id = ? AND end_time IS NOT NULL
+                ORDER BY end_time DESC 
+                LIMIT 1
+            ''', (guild_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            return Episode(
+                id=row['id'],
+                guild_id=row['guild_id'],
+                episode_number=row['episode_number'],
+                name=row['name'],
+                start_time=datetime.fromisoformat(row['start_time']) if row['start_time'] else None,
+                end_time=datetime.fromisoformat(row['end_time']) if row['end_time'] else None,
+                summary=row['summary'],
+                scene_data=row['scene_data'],
+                session_history=deserialize_json(row['session_history']),
+                created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting last completed episode for guild {guild_id}: {e}")
+            raise DatabaseOperationError(f"Failed to get last completed episode: {e}")
+    
+    @staticmethod
     def get_next_episode_number(guild_id: str) -> int:
         """Get the next episode number for a guild"""
         try:
