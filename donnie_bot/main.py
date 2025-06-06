@@ -430,54 +430,8 @@ async def get_enhanced_claude_dm_response(user_id: str, player_input: str):
                 print(f"⚠️ Fast memory retrieval failed: {e}")
                 memory_context = ""
         else:
-            print("⚠️ Persistent memory not available")
-        
-        # ⚡ FAST: Generate response with minimal context
-        print("⚡ Generating fast response...")
-        
-        # 🎤 Play thinking sound while generating response (if voice enabled)
-        try:
-            # ✅ FIXED: Safely convert guild_id for voice system
-            guild_id_int = None
-            if isinstance(guild_id_str, str) and guild_id_str.isdigit():
-                guild_id_int = int(guild_id_str)
-            elif isinstance(guild_id_str, int):
-                guild_id_int = guild_id_str
-            else:
-                # Try to get from campaign context as int
-                context_guild = campaign_context.get("guild_id")
-                if isinstance(context_guild, int):
-                    guild_id_int = context_guild
-                elif isinstance(context_guild, str) and context_guild.isdigit():
-                    guild_id_int = int(context_guild)
-            
-            if (guild_id_int and guild_id_int in voice_clients and 
-                voice_clients[guild_id_int].is_connected() and 
-                tts_enabled.get(guild_id_int, False)):
-                
-                # Get character name for thinking sound
-                character_name = campaign_context["players"][user_id]["character_data"]["name"]
-                asyncio.create_task(play_thinking_sound(guild_id_int, character_name))
-                print(f"🎤 Playing thinking sound for {character_name}")
-        except Exception as e:
-            print(f"⚠️ Could not play thinking sound: {e}")
-        
-        dm_response = await get_fast_dm_response_with_memory(
-            user_id, player_input, memory_context
-        )
-        
-        response_time = time.time() - response_start_time
-        print(f"⏱️ Response generated in {response_time:.2f} seconds")
-        
-        # 🔥 BACKGROUND PROCESSING: Store memories AFTER response sent
-        if PERSISTENT_MEMORY_AVAILABLE and BACKGROUND_PROCESSING:
-            print("🔥 Scheduling background memory processing...")
-            asyncio.create_task(process_memories_background(
-                guild_id_str, episode_id, user_id, player_input, dm_response
-            ))
-        
-        print("✅ FAST Enhanced memory response completed")
-        return dm_response
+            print("⚠️ Persistent memory not available - using streamlined response")
+            return await get_streamlined_claude_response(user_id, player_input)
         
     except Exception as e:
         print(f"❌ Enhanced memory system error: {e}")
