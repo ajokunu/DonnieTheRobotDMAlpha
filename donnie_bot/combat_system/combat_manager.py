@@ -46,6 +46,9 @@ class CombatManager:
         self.initiative_order: List[str] = []
         self.last_dm_response = ""
         
+        # ADD THIS LINE - Initialize battlefield_description
+        self.battlefield_description = ""  # This was missing!
+        
         # FIXED: Pre-compiled regex for speed with error handling
         try:
             self._hp_pattern = re.compile(r'(\w+)[^\d]*(\d+)[^\d]*(?:hp|hit points?)', re.IGNORECASE)
@@ -64,6 +67,27 @@ class CombatManager:
         self._processing_times = []
         
         print(f"✅ Combat Manager initialized for channel {channel_id}")
+
+    # OPTIONAL: Add a method to update battlefield description
+    def set_battlefield_description(self, description: str):
+        """Set the battlefield description for combat display"""
+        self.battlefield_description = description
+        print(f"✅ Battlefield description updated: {description[:50]}...")
+
+    def update_battlefield_from_scene(self, campaign_context: dict):
+        """Update battlefield description from campaign scene"""
+        try:
+            current_scene = campaign_context.get("current_scene", "")
+            if current_scene and len(current_scene.strip()) > 10:
+                # Extract a combat-relevant portion of the scene
+                scene_summary = current_scene[:200]  # First 200 characters
+                self.battlefield_description = scene_summary
+                print(f"✅ Battlefield updated from scene")
+            else:
+                self.battlefield_description = "The battle takes place in the midst of the giant crisis."
+        except Exception as e:
+            print(f"⚠️ Error updating battlefield from scene: {e}")
+            self.battlefield_description = "An active battlefield."
     
     def add_player(self, user_id: str, name: str, initiative: int):
         """FIXED: Add player combatant with proper validation"""

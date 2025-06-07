@@ -37,15 +37,26 @@ class CombatIntegration:
             
             if channel_id not in self.combat_managers:
                 print(f"🔄 Creating new combat manager for channel {channel_id}")
-                self.combat_managers[channel_id] = CombatManager(channel_id)
+                combat_manager = CombatManager(channel_id)
+                
+                # FIXED: Initialize battlefield description from campaign context
+                try:
+                    combat_manager.update_battlefield_from_scene(self.campaign_context)
+                except Exception as e:
+                    print(f"⚠️ Could not update battlefield from scene: {e}")
+                    combat_manager.battlefield_description = "The battle unfolds in the giant-threatened Sword Coast."
+                
+                self.combat_managers[channel_id] = combat_manager
             
             return self.combat_managers[channel_id]
             
         except Exception as e:
             print(f"❌ Error getting combat manager for channel {channel_id}: {e}")
             # Create a fallback manager
-            self.combat_managers[channel_id] = CombatManager(channel_id)
-            return self.combat_managers[channel_id]
+            fallback_manager = CombatManager(channel_id)
+            fallback_manager.battlefield_description = "A chaotic battlefield during the giant crisis."
+            self.combat_managers[channel_id] = fallback_manager
+            return fallback_manager
     
     def add_player_to_combat(self, channel_id: int, user_id: str, initiative: int) -> bool:
         """FIXED: Add player to combat with comprehensive validation"""
@@ -206,6 +217,12 @@ class CombatIntegration:
         try:
             combat_manager = self.get_combat_manager(channel_id)
             
+            # Update battlefield description before starting
+            try:
+                combat_manager.update_battlefield_from_scene(self.campaign_context)
+            except Exception as e:
+                print(f"⚠️ Could not update battlefield: {e}")
+            
             success = combat_manager.start_combat()
             
             if success:
@@ -319,7 +336,6 @@ class CombatIntegration:
             return False
     
     async def _check_and_announce_turn(self, channel_id: int, combat_manager: CombatManager):
-        """FIXED: Check for turn changes and announce next player"""
         try:
             current = combat_manager.get_current_combatant()
             round_num = combat_manager.get_round_number()

@@ -83,8 +83,9 @@ class CombatDisplayManager:
         except Exception as e:
             print(f"❌ Failed to update combat display: {e}")
     
+    
     def _build_embed(self, combat_manager) -> discord.Embed:
-        """Build combat status embed"""
+        """Build combat status embed with safe attribute access"""
         embed = discord.Embed(
             title="⚔️ Combat Status",
             color=0xFF4500
@@ -150,9 +151,10 @@ class CombatDisplayManager:
                 inline=True
             )
         
-        # Battlefield
-        if combat_manager.battlefield_description:
-            battlefield = combat_manager.battlefield_description
+        # FIXED: Battlefield - safer attribute access
+        battlefield_description = getattr(combat_manager, 'battlefield_description', None)
+        if battlefield_description and battlefield_description.strip():
+            battlefield = battlefield_description
             if len(battlefield) > 100:
                 battlefield = battlefield[:97] + "..."
             
