@@ -688,6 +688,96 @@ async def process_unified_dm_response_background(user_id: str, player_input: str
         traceback.print_exc()
         await handle_dm_response_error(message, user_id)
 
+async def process_unified_dm_response_background_enhanced(user_id: str, player_input: str, message, 
+                                                        character_name: str, char_data: dict, 
+                                                        player_name: str, guild_id: int, channel_id: int, 
+                                                        voice_will_speak: bool):
+    """Enhanced version with structured memory - SAFE VERSION"""
+    try:
+        guild_id_str = str(guild_id)
+        
+        # Get episode ID
+        episode_id = campaign_context.get("current_episode", 1)
+        if DATABASE_AVAILABLE:
+            try:
+                current_episode = EpisodeOperations.get_current_episode(guild_id_str)
+                if current_episode:
+                    episode_id = current_episode.id
+            except:
+                pass
+        
+        # SAFE: Try enhanced method first, fall back to original
+        if (UNIFIED_RESPONSE_AVAILABLE and unified_response_system_instance and 
+            hasattr(unified_response_system_instance, '_generate_enhanced_memory_response_v2')):
+            
+            try:
+                dm_response = await unified_response_system_instance._generate_enhanced_memory_response_v2(
+                    user_id=user_id,
+                    player_input=player_input,
+                    guild_id=guild_id_str,
+                    episode_id=episode_id,
+                    character_name=character_name,
+                    channel_id=channel_id
+                )
+                response_mode = "enhanced_memory_v2"
+                print(f"✅ Enhanced structured response generated")
+                
+            except Exception as e:
+                print(f"⚠️ Enhanced method failed, using standard: {e}")
+                # SAFE: Fall back to existing method
+                dm_response, response_mode = await generate_dm_response(
+                    user_id=user_id,
+                    player_input=player_input,
+                    guild_id=guild_id_str,
+                    episode_id=episode_id
+                )
+        else:
+            # SAFE: Use existing method
+            dm_response, response_mode = await generate_dm_response(
+                user_id=user_id,
+                player_input=player_input,
+                guild_id=guild_id_str,
+                episode_id=episode_id
+            )
+        
+        # Update Discord message
+        tts_text = create_tts_version(dm_response)
+        
+        embed = message.embeds[0]
+        for i, field in enumerate(embed.fields):
+            if field.name == "🐉 Donnie the DM":
+                # Include response mode in Discord message for debugging (only if not enhanced memory)
+                if response_mode != "enhanced_memory_v2" and len(dm_response) < 400:
+                    mode_indicator = f" *({response_mode})*"
+                    embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response + mode_indicator, inline=False)
+                else:
+                    embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
+                break
+        
+        view = ContinueView(user_id)
+        await message.edit(embed=embed, view=view)
+        
+        # Background memory storage (only if enhanced memory was used)
+        if UNIFIED_RESPONSE_AVAILABLE and response_mode == "enhanced_memory_v2":
+            asyncio.create_task(store_interaction_background(
+                guild_id_str, episode_id, user_id, player_input, dm_response
+            ))
+        
+        # Voice processing (unchanged)
+        if voice_will_speak:
+            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+            
+    except Exception as e:
+        print(f"❌ Enhanced background processing error: {e}")
+        import traceback
+        traceback.print_exc()
+        # SAFE: Fall back to original function
+        await process_unified_dm_response_background(
+            user_id, player_input, message, character_name, char_data, 
+            player_name, guild_id, channel_id, voice_will_speak
+        )
+
+
 async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
     """Generate TTS audio using OpenAI's API - optimized for speed"""
     try:

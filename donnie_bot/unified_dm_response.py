@@ -10,7 +10,7 @@ This replaces all duplicate response generators in main.py and enhanced_dm_syste
 import asyncio
 import time
 import random
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any  # Make sure Optional is imported
 from enum import Enum
 from datetime import datetime
 
@@ -37,7 +37,7 @@ class UnifiedDMResponseSystem:
                 persistent_memory_available: bool = False,
                 database_operations=None,
                 max_response_length: int = 450,
-                response_timeout: float = 8.0):
+                response_timeout: float = 8.0, **kwargs):
         
         self.claude_client = claude_client
         self.campaign_context = campaign_context
@@ -62,6 +62,24 @@ class UnifiedDMResponseSystem:
         else:
             print("⚠️ Memory operations not available")
             self.persistent_memory_available = False
+            
+        self.structured_memory = None
+        if self.persistent_memory_available and self.memory_ops:
+            try:
+                # SAFE: Import with relative path
+                import sys
+                import os
+                sys.path.append(os.path.dirname(__file__))
+                
+                from structured_memory import StructuredMemoryBuilder
+                self.structured_memory = StructuredMemoryBuilder(self.memory_ops, campaign_context)
+                print("✅ Structured memory builder initialized")
+            except ImportError as e:
+                print(f"⚠️ Structured memory not available: {e}")
+            except Exception as e:
+                print(f"⚠️ Structured memory initialization failed: {e}")
+        else:
+            print("⚠️ Prerequisites not available for structured memory")
         
         # Storm King's Thunder specific context
         self.campaign_prompts = {
@@ -335,6 +353,88 @@ class UnifiedDMResponseSystem:
         
         return dm_response
     
+    async def _generate_enhanced_memory_response_v2(self, user_id: str, player_input: str, 
+                                                  guild_id: str, episode_id: int, 
+                                                  character_name: str, channel_id: Optional[int] = None) -> str:
+        """Enhanced memory response with structured context - SAFE VERSION"""
+        
+        # SAFE: Fall back to original method if structured memory unavailable
+        if not self.structured_memory:
+            print("⚠️ Structured memory unavailable, using original method")
+            return await self._generate_enhanced_memory_response(
+                user_id, player_input, guild_id, episode_id, character_name
+            )
+        
+        # SAFE: Try structured approach with fallback
+        try:
+            memory_context = await self.structured_memory.build_reliable_context(
+                guild_id=guild_id,
+                player_input=player_input,
+                character_name=character_name,
+                channel_id=channel_id
+            )
+            
+            prompt = self._build_campaign_memory_prompt(character_name, player_input, memory_context)
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.claude_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=min(300, self.max_response_length // 3),
+                    temperature=0.7,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            )
+            
+            dm_response = response.content[0].text.strip()
+            if len(dm_response) > self.max_response_length:
+                dm_response = dm_response[:self.max_response_length-3] + "..."
+            
+            self._update_session_history(user_id, player_input, dm_response, "enhanced_memory_v2")
+            return dm_response
+            
+        except Exception as e:
+            print(f"⚠️ Structured memory failed, falling back: {e}")
+            return await self._generate_enhanced_memory_response(
+                user_id, player_input, guild_id, episode_id, character_name
+            )
+
+    def _build_campaign_memory_prompt(self, character_name: str, player_input: str, 
+                                    memory_context: Dict[str, Any]) -> str:
+        """Build prompt that prevents false campaign memories while allowing D&D content"""
+        
+        party_status = memory_context.get('party_status', 'No party registered')
+        
+        prompt = f"""You are Donnie, DM for Storm King's Thunder D&D 5e 2024.
+
+**VERIFIED CAMPAIGN HISTORY** (ONLY reference these when discussing past sessions):
+{chr(10).join(memory_context.get('recent_events', ['No recent campaign events']))}
+
+**VERIFIED CAMPAIGN MEMORIES** (Past events in THIS specific campaign):
+{chr(10).join(memory_context.get('character_memories', ['No campaign memories available']))}
+
+**CURRENT GAME STATE**:
+- Scene: {memory_context.get('current_scene', 'Adventure continues')}
+- Combat: {memory_context.get('combat_state', 'No active combat')}
+- Party: {party_status}
+
+**YOUR DM AUTHORITY** - You may freely use:
+✅ All D&D 5e 2024 rules, spells, monsters, mechanics
+✅ Storm King's Thunder content (Nightstone, Zephyros, giant lords, etc.)
+✅ Create new NPCs, encounters, locations as the story requires
+✅ Make rulings and progress the narrative naturally
+
+**CAMPAIGN MEMORY RESTRICTION** - Never reference:
+❌ Past campaign events NOT listed in "VERIFIED CAMPAIGN HISTORY"
+❌ Previous player actions NOT in "VERIFIED CAMPAIGN MEMORIES" 
+❌ Made-up events like "Remember when you fought X last week"
+
+**CURRENT PLAYER ACTION**: {character_name}: {player_input}
+
+**DM RESPONSE** (use D&D/SKT freely, only verified campaign history, under {self.max_response_length} chars):"""
+        
+        return prompt
+
     def _build_enhanced_memory_prompt(self, character_name: str, player_input: str, 
                                     memory_context: Dict[str, Any]) -> str:
         """Build enhanced prompt with memory context"""
