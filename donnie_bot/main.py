@@ -545,7 +545,7 @@ def configure_performance_mode(fast_mode: bool = True):
     if fast_mode:
         MAX_MEMORIES_FAST = 2  # Fewer memories for speed
         BACKGROUND_PROCESSING = True
-        MAX_RESPONSE_LENGTH = 350  # Shorter responses
+        MAX_RESPONSE_LENGTH = 550  # Shorter responses
         print("⚡ PERFORMANCE MODE: Fast memory retrieval with background processing")
     else:
         MAX_MEMORIES_FAST = 5  # More memories

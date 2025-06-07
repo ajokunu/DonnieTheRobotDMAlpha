@@ -36,8 +36,8 @@ class UnifiedDMResponseSystem:
     def __init__(self, claude_client, campaign_context: Dict, 
                  persistent_memory_available: bool = False,
                  database_operations=None,
-                 max_response_length: int = 450,
-                 response_timeout: float = 8.0):
+                 max_response_length: int = 550,
+                 response_timeout: float = 10.0):
         
         self.claude_client = claude_client
         self.campaign_context = campaign_context
@@ -65,7 +65,7 @@ class UnifiedDMResponseSystem:
         
         # Storm King's Thunder specific context
         self.campaign_prompts = {
-            "setting_context": "The Sword Coast during the giant crisis. The ancient ordning that kept giant society in check has collapsed, throwing giantkind into chaos.",
+            "setting_context": "The Sword Coast during the giant crisis. The ancient ordning that kept giant society in check has collapsed, throwing giantkind into chaos. Specifically Storm Kings thunder the campaign module",
             "threat_level": "Giants of all types roam the land unchecked, raiding settlements and terrorizing the small folk.",
             "tone": "Epic fantasy adventure with real consequences and meaningful choices."
         }
@@ -178,7 +178,7 @@ class UnifiedDMResponseSystem:
             None,
             lambda: self.claude_client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=min(300, self.max_response_length // 3),
+                max_tokens=min(500, self.max_response_length // 3),
                 temperature=0.8,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -262,7 +262,7 @@ class UnifiedDMResponseSystem:
             None,
             lambda: self.claude_client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=min(150, self.max_response_length // 3),
+                max_tokens=min(550, self.max_response_length // 3),
                 temperature=0.8,  # Slightly more creative for streamlined
                 messages=[{"role": "user", "content": prompt}]
             )
