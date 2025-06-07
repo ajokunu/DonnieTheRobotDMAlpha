@@ -493,13 +493,13 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
         inline=False
     )
     embed.add_field(
-        name="🐉 Donnie the DM",
-        value="*Donnie continues the narrative...*",
+        name="🐉 Donnie the DM- Alpha",
+        value="*Alpha Donnie continues the narrative...*",
         inline=False
     )
     
     if voice_will_speak:
-        embed.add_field(name="🎤", value="*Donnie prepares his response...*", inline=False)
+        embed.add_field(name="🎤", value="*Alpha Donnie prepares his response...*", inline=False)
     
     # Send processing message
     message = await interaction.followup.send(embed=embed)
@@ -1569,9 +1569,7 @@ async def join_voice_channel(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
         
         # Test voice with welcome message
-        welcome_text = "Greetings, brave adventurers! I am Donnie, your Dungeon Master. I'll be narrating this Storm King's Thunder campaign with streamlined combat and continue buttons for faster gameplay."
-        if PERSISTENT_MEMORY_AVAILABLE:
-            welcome_text += " I'll also remember your adventures across episodes!"
+        welcome_text = "Well, well. Another group of 'adventurers.' I'm Donnie, your long-suffering Dungeon Master, and I can already sense the chaos brewing. I'll narrate this Storm King's Thunder campaign with hallucinating combat scenes and definitely not broken continue buttons, because I've learned not to trust you people with anything more complicated than a coin flip."
         if COMBAT_AVAILABLE:
             welcome_text += " Combat will be tracked automatically with separate display messages!"
         welcome_text += " Just describe what you want to do, and let the adventure unfold!"
@@ -3735,7 +3733,7 @@ if __name__ == "__main__":
     if PERSISTENT_MEMORY_AVAILABLE:
         print("✅ ENHANCED MEMORY SYSTEM loaded!")
         print("🧠 Features: Persistent conversations, NPC tracking, plot thread management")
-        print("📊 Donnie will remember everything across episodes and sessions!")
+        print("📊 Alpha Donnie will remember everything across episodes and sessions!")
     else:
         print("⚠️ Enhanced memory system not available")
         print("Install enhanced_dm_system.py and memory_operations.py for persistent memory")
