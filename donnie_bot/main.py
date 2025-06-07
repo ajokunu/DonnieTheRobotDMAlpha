@@ -55,21 +55,25 @@ def get_voice_channel(interaction: discord.Interaction):
     if not interaction.user.voice:
         return None
     return interaction.user.voice.channel
+# ====== Memory System Adapter ======
 class MemoryDatabaseAdapter:
-    """Adapter to provide memory operations interface for enhanced_dm_system.py"""
+    """FIXED: Adapter to provide memory operations interface"""
     
     def __init__(self, episode_ops, character_ops, guild_ops):
         self.episode_ops = episode_ops
         self.character_ops = character_ops
         self.guild_ops = guild_ops
+        self.initialized = DATABASE_AVAILABLE
+        print(f"✅ Memory database adapter created (Available: {self.initialized})")
     
     async def store_conversation_memory(self, campaign_id: str, episode_id: int, 
                                       user_id: str, character_name: str, 
                                       player_input: str, dm_response: str, **kwargs) -> bool:
         """Store conversation memory using existing database operations"""
+        if not self.initialized:
+            return False
         try:
-            # For now, just return True since we're using the unified system
-            # The actual storage will be handled by the unified response system
+            # For now, just return True since unified system handles this
             return True
         except Exception as e:
             print(f"❌ Error storing conversation memory: {e}")
@@ -78,8 +82,10 @@ class MemoryDatabaseAdapter:
     async def retrieve_relevant_memories(self, campaign_id: str, query: str, 
                                        max_memories: int = 5, **kwargs) -> list:
         """Retrieve relevant memories - simplified version"""
+        if not self.initialized:
+            return []
         try:
-            # Return empty list for now - unified system will handle this
+            # Return empty list for now - unified system handles this
             return []
         except Exception as e:
             print(f"❌ Error retrieving memories: {e}")
@@ -89,23 +95,147 @@ class MemoryDatabaseAdapter:
         """Get campaign NPCs - mock implementation"""
         return []
 
-# ====== SYSTEM VARIABLE INITIALIZATION ======
+# ====== DATABASE HELPER FUNCTIONS ======
+def update_database_from_campaign_context(guild_id: str):
+    """FIXED: Update database with current campaign context"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        # Ensure guild_id is string
+        guild_id = str(guild_id)
+        
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode and campaign_context.get("session_history"):
+            EpisodeOperations.update_session_history(
+                current_episode.id,
+                campaign_context["session_history"]
+            )
+        
+        # Convert guild_id to int for voice settings if possible
+        try:
+            guild_id_int = int(guild_id)
+            settings_update = {
+                'voice_speed': voice_speed.get(guild_id_int, 1.25),
+                'tts_enabled': tts_enabled.get(guild_id_int, False),
+                'current_scene': campaign_context.get("current_scene", ""),
+                'current_episode': campaign_context.get("current_episode", 0)
+            }
+            
+            GuildOperations.update_guild_settings(guild_id, **settings_update)
+            print(f"✅ Updated database settings for guild {guild_id}")
+        except ValueError:
+            print(f"⚠️ Could not convert guild_id to int: {guild_id}")
+    except Exception as e:
+        print(f"⚠️ Failed to update database from campaign context: {e}")
+
+def sync_campaign_context_with_database(guild_id: str):
+    """FIXED: Sync in-memory campaign context with database state"""
+    if not DATABASE_AVAILABLE:
+        return
+    
+    try:
+        # Ensure guild_id is string for database operations
+        guild_id = str(guild_id)
+        
+        print(f"🔄 Syncing campaign context for guild {guild_id}")
+        
+        # Get current episode from database
+        current_episode = EpisodeOperations.get_current_episode(guild_id)
+        if current_episode:
+            campaign_context["current_episode"] = current_episode.episode_number
+            campaign_context["episode_active"] = True
+            campaign_context["episode_start_time"] = current_episode.start_time
+            campaign_context["guild_id"] = guild_id
+            
+            if current_episode.session_history:
+                campaign_context["session_history"] = current_episode.session_history
+            
+            print(f"✅ Synced campaign context with Episode {current_episode.episode_number}")
+        
+        # Get guild settings
+        guild_settings = GuildOperations.get_guild_settings(guild_id)
+        if guild_settings:
+            try:
+                guild_id_int = int(guild_id)
+                voice_speed[guild_id_int] = guild_settings.get('voice_speed', 1.25)
+                tts_enabled[guild_id_int] = guild_settings.get('tts_enabled', False)
+            except ValueError:
+                print(f"⚠️ Could not convert guild_id to int for voice settings: {guild_id}")
+            
+            if 'current_scene' in guild_settings and guild_settings['current_scene']:
+                campaign_context["current_scene"] = guild_settings['current_scene']
+                print(f"✅ Synced scene from database")
+            
+            print(f"✅ Synced guild settings for {guild_id}")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to sync campaign context: {e}")
+
+# ====== GLOBAL SYSTEM VARIABLE DECLARATIONS ======
+
 episode_commands = None
 character_progression = None
+unified_response_system_instance = None
+memory_database_adapter = None
 
 
 
-# ====== FIXED DATABASE AND EPISODE MANAGEMENT IMPORTS ======
-# Database imports - NOW WORKING!
-try:
-    from database import init_database, close_database
-    from database.operations import EpisodeOperations, CharacterOperations, GuildOperations, DatabaseOperationError
-    print("✅ Database operations imported successfully")
-    DATABASE_AVAILABLE = True
-except ImportError as e:
-    print(f"❌ Database operations failed to import: {e}")
-    print("Make sure database/__init__.py and database/operations.py exist")
-    DATABASE_AVAILABLE = False
+# ====== DATABASE AND EPISODE MANAGEMENT IMPORTS ======
+
+def safe_import_database():
+    """Safely import database operations with proper error handling"""
+    try:
+        from database import init_database, close_database, health_check, get_database_stats
+        from database.operations import EpisodeOperations, CharacterOperations, GuildOperations, DatabaseOperationError
+        print("✅ Database operations imported successfully")
+        return True, (init_database, close_database, health_check, get_database_stats, 
+                     EpisodeOperations, CharacterOperations, GuildOperations, DatabaseOperationError)
+    except ImportError as e:
+        print(f"❌ Database operations failed to import: {e}")
+        return False, (None, None, None, None, None, None, None, None)
+
+def safe_import_episode_manager():
+    """Safely import episode management with proper error handling"""
+    try:
+        from episode_manager import EpisodeCommands
+        print("✅ Episode management imported successfully")
+        return True, EpisodeCommands
+    except ImportError as e:
+        print(f"❌ Episode management failed to import: {e}")
+        return False, None
+
+def safe_import_character_progression():
+    """Safely import character progression with proper error handling"""
+    try:
+        from character_tracker import CharacterProgressionCommands
+        print("✅ Character progression imported successfully") 
+        return True, CharacterProgressionCommands
+    except ImportError as e:
+        print(f"❌ Character progression failed to import: {e}")
+        return False, None
+
+def safe_import_unified_response():
+    """Safely import unified response system"""
+    try:
+        from unified_dm_response import (
+            initialize_unified_response_system,
+            generate_dm_response,
+            store_interaction_background,
+            get_response_system_status
+        )
+        print("✅ Unified DM Response System imported!")
+        return True, (initialize_unified_response_system, generate_dm_response, 
+                     store_interaction_background, get_response_system_status)
+    except ImportError as e:
+        print(f"⚠️ Unified response system not available: {e}")
+        return False, (None, None, None, None)
+
+# Perform safe imports
+DATABASE_AVAILABLE, database_imports = safe_import_database()
+if DATABASE_AVAILABLE:
+    init_database, close_database, health_check, get_database_stats, EpisodeOperations, CharacterOperations, GuildOperations, DatabaseOperationError = database_imports
+else:
     # Create fallback empty classes to prevent crashes
     class EpisodeOperations:
         @staticmethod
@@ -125,52 +255,17 @@ except ImportError as e:
     
     def init_database(): pass
     def close_database(): pass
+    def health_check(): return False
+    def get_database_stats(): return {}
 
-# Episode Management imports - NOW WORKING!
-try:
-    from episode_manager import EpisodeCommands
-    print("✅ Episode management imported successfully")
-    EPISODE_MANAGER_AVAILABLE = True
-except ImportError as e:
-    print(f"❌ Episode management failed to import: {e}")
-    print("Episode management will be disabled")
-    EPISODE_MANAGER_AVAILABLE = False
-    EpisodeCommands = None
+EPISODE_MANAGER_AVAILABLE, EpisodeCommands = safe_import_episode_manager()
+CHARACTER_PROGRESSION_AVAILABLE, CharacterProgressionCommands = safe_import_character_progression()
+UNIFIED_RESPONSE_AVAILABLE, unified_imports = safe_import_unified_response()
 
-# Character Progression imports - NOW WORKING!  
-try:
-    from character_tracker import CharacterProgressionCommands
-    print("✅ Character progression imported successfully")
-    CHARACTER_PROGRESSION_AVAILABLE = True
-except ImportError as e:
-    print(f"❌ Character progression failed to import: {e}")
-    print("Character progression tracking will be disabled")
-    CHARACTER_PROGRESSION_AVAILABLE = False
-    CharacterProgressionCommands = None
-
-# Audio system imports - WORKING!
-try:
-    from audio_system import EnhancedVoiceManager
-    print("✅ Enhanced audio system imported successfully")
-    ENHANCED_AUDIO_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ Enhanced audio system not available: {e}")
-    ENHANCED_AUDIO_AVAILABLE = False
-
-try:
-    from unified_dm_response import (
-        initialize_unified_response_system,
-        generate_dm_response,
-        store_interaction_background,
-        get_response_system_status  # ✅ ADDED - This was missing
-    )
-    print("✅ Unified DM Response System imported!")
-    UNIFIED_RESPONSE_AVAILABLE = True
-    # Set memory availability based on unified system (not always true)
-    PERSISTENT_MEMORY_AVAILABLE = True  # The unified system will handle fallbacks
-except ImportError as e:
-    print(f"⚠️ Unified response system not available: {e}")
-    UNIFIED_RESPONSE_AVAILABLE = False
+if UNIFIED_RESPONSE_AVAILABLE:
+    initialize_unified_response_system, generate_dm_response, store_interaction_background, get_response_system_status = unified_imports
+    PERSISTENT_MEMORY_AVAILABLE = True  # The unified system handles fallbacks
+else:
     PERSISTENT_MEMORY_AVAILABLE = False
 
 # Combat system imports - NEW COMBAT INTEGRATION!
@@ -825,84 +920,47 @@ async def add_to_voice_queue(guild_id: int, text: str, player_name: str, message
 
 @bot.event
 async def on_ready():
+    """FIXED: Proper initialization order with global variable handling"""
+    global episode_commands, character_progression, unified_response_system_instance, memory_database_adapter, DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE, CHARACTER_PROGRESSION_AVAILABLE, UNIFIED_RESPONSE_AVAILABLE, PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
+    # Ensure all global variables are initialized
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
     print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
     print(f'🧠 Enhanced Memory System: {"✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"}')
     
-    # Initialize database with enhanced error handling
-    memory_database_adapter = None
+    # ====== FIXED DATABASE INITIALIZATION ======
     if DATABASE_AVAILABLE:
         try:
+            print("🔄 Initializing database...")
             init_database()
             print("✅ Database initialized successfully")
             
-            # ✅ FIXED: Create memory adapter for enhanced_dm_system.py
+            # Create memory adapter
             memory_database_adapter = MemoryDatabaseAdapter(
                 EpisodeOperations, CharacterOperations, GuildOperations
             )
-            print("✅ Memory database adapter created")
             
             # Test database health
-            from database import health_check, get_database_stats
             if health_check():
                 stats = get_database_stats()
                 print(f"📊 Database stats: {stats}")
             else:
                 print("⚠️ Database health check failed")
                 
-            # ✅ CORRECT LOCATION - After successful database initialization
-            if EPISODE_MANAGER_AVAILABLE:
-                try:
-                    episode_commands = EpisodeCommands(
-                        bot=bot,
-                        campaign_context=campaign_context,
-                        voice_clients=voice_clients,
-                        tts_enabled=tts_enabled,
-                        add_to_voice_queue_func=add_to_voice_queue,
-                        episode_operations=EpisodeOperations,
-                        character_operations=CharacterOperations,
-                        guild_operations=GuildOperations,
-                        claude_client=claude_client,
-                        sync_function=sync_campaign_context_with_database
-                    )
-                    print("✅ Episode management system initialized with database support")
-                except Exception as e:
-                    print(f"⚠️ Episode management initialization failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    episode_commands = None
-            
-            if CHARACTER_PROGRESSION_AVAILABLE:
-                try:
-                    character_progression = CharacterProgressionCommands(
-                        bot=bot,
-                        campaign_context=campaign_context,
-                        voice_clients=voice_clients,
-                        tts_enabled=tts_enabled,
-                        add_to_voice_queue_func=add_to_voice_queue,
-                        character_operations=CharacterOperations,
-                        episode_operations=EpisodeOperations
-                    )
-                    print("✅ Character progression system initialized with database support")
-                except Exception as e:
-                    print(f"⚠️ Character progression initialization failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    character_progression = None
-                    
         except Exception as e:
             print(f"❌ Database initialization failed: {e}")
-            print("🔄 Bot will continue without database features")
+            DATABASE_AVAILABLE = False
             memory_database_adapter = None
     else:
         print("⚠️ Database features disabled")
+        memory_database_adapter = None
     
-    # ✅ NEW: Initialize Unified Response System
+    # ====== UNIFIED RESPONSE SYSTEM INITIALIZATION WITH UNIFIED RESPONSE ======
     if UNIFIED_RESPONSE_AVAILABLE:
         try:
-            initialize_unified_response_system(
+            print("🔄 Initializing unified response system...")
+            unified_response_system_instance = initialize_unified_response_system(
                 claude_client=claude_client,
                 campaign_context=campaign_context,
                 persistent_memory_available=PERSISTENT_MEMORY_AVAILABLE,
@@ -918,16 +976,68 @@ async def on_ready():
     else:
         print("⚠️ Unified response system not available - using basic fallbacks")
     
-    # Initialize combat system
+    # ====== FIXED EPISODE MANAGEMENT INITIALIZATION ======
+    if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing episode management...")
+            episode_commands = EpisodeCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_clients,
+                tts_enabled=tts_enabled,
+                add_to_voice_queue_func=add_to_voice_queue,
+                episode_operations=EpisodeOperations,
+                character_operations=CharacterOperations,
+                guild_operations=GuildOperations,
+                claude_client=claude_client,
+                sync_function=sync_campaign_context_with_database
+            )
+            print("✅ Episode management system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Episode management initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            episode_commands = None
+    else:
+        print("⚠️ Episode management disabled (missing dependencies)")
+        episode_commands = None
+    
+    # ====== FIXED CHARACTER PROGRESSION INITIALIZATION ======
+    if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing character progression...")
+            character_progression = CharacterProgressionCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_clients,
+                tts_enabled=tts_enabled,
+                add_to_voice_queue_func=add_to_voice_queue,
+                character_operations=CharacterOperations,
+                episode_operations=EpisodeOperations
+            )
+            print("✅ Character progression system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Character progression initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            character_progression = None
+    else:
+        print("⚠️ Character progression disabled (missing dependencies)")
+        character_progression = None
+    
+    # ====== FIXED COMBAT SYSTEM INITIALIZATION ======
     if COMBAT_AVAILABLE:
         try:
+            print("🔄 Initializing combat system...")
             if 'initialize_combat_system' in globals() and callable(initialize_combat_system):
                 await initialize_combat_system(bot, campaign_context)
+                print("✅ Combat system initialized successfully")
             else:
-                print("⚠️ initialize_combat_system is not defined or not callable")
+                print("⚠️ Combat system initialize function not found")
         except Exception as e:
             print(f"⚠️ Combat system initialization failed: {e}")
     
+    # ====== COMMAND SYNCHRONIZATION ======
     print('🔄 Syncing slash commands...')
     
     # Check for FFmpeg
@@ -938,7 +1048,7 @@ async def on_ready():
         synced = await bot.tree.sync()
         print(f'✅ Synced {len(synced)} slash commands')
         
-        # Updated feature status summary
+        # ====== FINAL STATUS REPORT ======
         features = {
             "Database": "✅" if DATABASE_AVAILABLE else "❌",
             "Unified Response System": "✅" if UNIFIED_RESPONSE_AVAILABLE else "❌",
@@ -957,10 +1067,9 @@ async def on_ready():
             
         print("🎉 Ready for UNIFIED epic adventures!")
         
-        # ✅ Verify integration on startup
-        if UNIFIED_RESPONSE_AVAILABLE:
+        # ====== SYSTEM VERIFICATION ======
+        if UNIFIED_RESPONSE_AVAILABLE and unified_response_system_instance:
             try:
-                from unified_dm_response import get_response_system_status
                 status = get_response_system_status()
                 if "Not Initialized" not in str(status):
                     print("✅ Unified response system verified working!")
@@ -969,13 +1078,23 @@ async def on_ready():
             except Exception as e:
                 print(f"⚠️ Could not verify unified response system: {e}")
         
+        # Verify episode management
+        if episode_commands:
+            print("✅ Episode management verified working!")
+        else:
+            print("⚠️ Episode management not properly initialized")
+        
     except Exception as e:
         print(f'❌ Failed to sync commands: {e}')
         import traceback
         traceback.print_exc()
 
+# ====== BOT DISCONNECT HANDLER ======
 @bot.event
 async def on_disconnect():
+    """FIXED: Proper cleanup with global variable access"""
+    global episode_commands, character_progression, unified_response_system_instance
+    
     print("🔌 Bot disconnecting...")
     
     # Save any pending changes to database
@@ -989,6 +1108,11 @@ async def on_disconnect():
             print("✅ Database connections closed and data saved")
         except Exception as e:
             print(f"⚠️ Error during database cleanup: {e}")
+    
+    # Clean up global references
+    episode_commands = None
+    character_progression = None
+    unified_response_system_instance = None
     
     print("👋 Goodbye!")
 
