@@ -974,7 +974,7 @@ async def on_ready():
     global memory_database_adapter, DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE
     global CHARACTER_PROGRESSION_AVAILABLE, UNIFIED_RESPONSE_AVAILABLE
     global PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
-    
+
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
@@ -2421,85 +2421,554 @@ async def show_status(interaction: discord.Interaction):
 @bot.tree.command(name="initiative", description="Add your initiative roll to combat")
 @app_commands.describe(roll="Your initiative roll (d20 + modifier)")
 async def add_initiative(interaction: discord.Interaction, roll: int):
-    """Add player initiative to combat"""
-    if not COMBAT_AVAILABLE:
-        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
-        return
-    
-    user_id = str(interaction.user.id)
-    if user_id not in campaign_context["characters"]:
-        await interaction.response.send_message("❌ Register character first with `/character`!", ephemeral=True)
-        return
-    
-    combat = get_combat_integration()
-    if combat:
-        combat.add_player_to_combat(interaction.channel.id, user_id, roll)
+    """FIXED: Add player initiative to combat with comprehensive error handling"""
+    try:
+        if not COMBAT_AVAILABLE:
+            await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+            return
         
-        char_name = campaign_context["players"][user_id]["character_data"]["name"]
-        await interaction.response.send_message(f"✅ {char_name} added to initiative with {roll}!")
+        user_id = str(interaction.user.id)
+        
+        # Check if character is registered
+        if user_id not in campaign_context["characters"]:
+            embed = discord.Embed(
+                title="❌ Character Required",
+                description="Register your character first with `/character`!",
+                color=0xFF6B6B
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Validate initiative roll
+        if not isinstance(roll, int) or roll < 1 or roll > 50:
+            embed = discord.Embed(
+                title="❌ Invalid Initiative",
+                description="Initiative must be a number between 1 and 50!",
+                color=0xFF6B6B
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Get combat integration
+        combat = get_combat_integration()
+        if not combat:
+            await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+            return
+        
+        # Get character info
+        char_data = campaign_context["players"][user_id]["character_data"]
+        char_name = char_data["name"]
+        player_name = campaign_context["players"][user_id]["player_name"]
+        
+        # Add to combat
+        success = combat.add_player_to_combat(interaction.channel.id, user_id, roll)
+        
+        if success:
+            # Create success embed
+            embed = discord.Embed(
+                title="🎲 Initiative Added!",
+                description=f"**{char_name}** joins combat with initiative **{roll}**",
+                color=0x32CD32
+            )
+            
+            embed.add_field(
+                name="⚔️ Character Info",
+                value=f"**Player:** {player_name}\n**Class:** {char_data['race']} {char_data['class']} (Level {char_data['level']})",
+                inline=True
+            )
+            
+            # Get combat status for display
+            combat_manager = combat.get_combat_manager(interaction.channel.id)
+            if combat_manager:
+                status = combat_manager.get_combat_status()
+                
+                embed.add_field(
+                    name="🎯 Combat Status",
+                    value=f"**Phase:** {status.get('phase', 'Unknown')}\n**Combatants:** {status.get('combatants_count', 0)}",
+                    inline=True
+                )
+                
+                # Show initiative order if combat is active
+                if combat_manager.is_active() and combat_manager.initiative_order:
+                    order_text = []
+                    for i, combatant_id in enumerate(combat_manager.initiative_order[:5]):  # Show top 5
+                        combatant = combat_manager.combatants.get(combatant_id)
+                        if combatant:
+                            indicator = "👑" if i == 0 else f"{i+1}."
+                            order_text.append(f"{indicator} {combatant.name} ({combatant.initiative})")
+                    
+                    if order_text:
+                        embed.add_field(
+                            name="🏆 Initiative Order",
+                            value="\n".join(order_text),
+                            inline=False
+                        )
+                        
+                        if combat_manager.round_number > 0:
+                            current = combat_manager.get_current_combatant()
+                            if current:
+                                embed.add_field(
+                                    name="⏰ Current Turn",
+                                    value=f"Round {combat_manager.round_number}: **{current.name}**",
+                                    inline=True
+                                )
+                
+                # Auto-start message
+                if combat_manager.phase.value == "active":
+                    embed.add_field(
+                        name="🚀 Combat Active!",
+                        value="Combat has started! Use `/action` to describe what you do on your turn.",
+                        inline=False
+                    )
+            
+            embed.set_footer(text="Use /combat_status to check combat state • /action to take actions")
+            
+            await interaction.response.send_message(embed=embed)
+            
+            # Voice announcement if enabled
+            guild_id = interaction.guild.id
+            voice_will_speak = (guild_id in voice_clients and 
+                               voice_clients[guild_id].is_connected() and 
+                               tts_enabled.get(guild_id, False))
+            
+            if voice_will_speak:
+                announcement = f"{char_name} enters combat with initiative {roll}!"
+                await add_to_voice_queue(guild_id, announcement, "Initiative")
+        
+        else:
+            # Error adding to combat
+            embed = discord.Embed(
+                title="❌ Failed to Join Combat",
+                description="Could not add character to combat. Check console for details.",
+                color=0xFF6B6B
+            )
+            embed.add_field(
+                name="🔧 Troubleshooting",
+                value="• Make sure combat system is properly initialized\n• Check that your character is registered\n• Try `/combat_status` to see current state",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        print(f"❌ Critical error in add_initiative: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            embed = discord.Embed(
+                title="❌ Initiative Command Failed",
+                description=f"An unexpected error occurred: {str(e)}",
+                color=0xFF6B6B
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+        except:
+            pass  # Fail silently if we can't even send error message
+
+@bot.tree.command(name="start_combat", description="Manually start combat (Admin only)")
+@app_commands.describe(
+    enemy_name="Name of enemy to add (optional)",
+    enemy_initiative="Enemy's initiative roll (optional)",
+    enemy_hp="Enemy's HP (optional)"
+)
+async def start_combat_command(interaction: discord.Interaction, 
+                              enemy_name: Optional[str] = None,
+                              enemy_initiative: Optional[int] = None,
+                              enemy_hp: Optional[int] = None):
+    """FIXED: Manual combat start with optional enemy"""
+    try:
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        if not COMBAT_AVAILABLE:
+            await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+            return
+        
+        combat = get_combat_integration()
+        if not combat:
+            await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+            return
+        
+        # Get combat manager
+        combat_manager = combat.get_combat_manager(interaction.channel.id)
+        
+        # Add enemy if specified
+        if enemy_name and enemy_initiative is not None:
+            success = combat_manager.add_enemy_manually(enemy_name, enemy_initiative, enemy_hp)
+            if not success:
+                await interaction.response.send_message(f"❌ Failed to add enemy: {enemy_name}", ephemeral=True)
+                return
+        
+        # Try to start combat
+        success = combat_manager.start_combat()
+        
+        if success:
+            embed = discord.Embed(
+                title="⚔️ Combat Started!",
+                description="Combat has been manually initiated by the DM.",
+                color=0xFF4500
+            )
+            
+            if enemy_name:
+                embed.add_field(
+                    name="👹 Enemy Added",
+                    value=f"**{enemy_name}** (Initiative: {enemy_initiative}, HP: {enemy_hp or 'Unknown'})",
+                    inline=False
+                )
+            
+            # Show current status
+            status = combat_manager.get_combat_status()
+            embed.add_field(
+                name="🎯 Combat Info",
+                value=f"**Round:** {status.get('round_number', 1)}\n**Combatants:** {status.get('combatants_count', 0)}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📋 Next Steps",
+                value="Players should use `/initiative <roll>` to join combat!",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        else:
+            embed = discord.Embed(
+                title="❌ Cannot Start Combat",
+                description="Combat could not be started. Check that there are combatants with initiative.",
+                color=0xFF6B6B
+            )
+            
+            status = combat_manager.get_combat_status()
+            embed.add_field(
+                name="🔍 Current State",
+                value=f"**Phase:** {status.get('phase', 'Unknown')}\n**Combatants:** {status.get('combatants_count', 0)}",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        print(f"❌ Error in start_combat_command: {e}")
+        await interaction.response.send_message(f"❌ Error starting combat: {e}", ephemeral=True)
+
+@bot.tree.command(name="add_enemy", description="Add enemy to combat (Admin only)")
+@app_commands.describe(
+    name="Enemy name",
+    initiative="Enemy initiative roll",
+    hp="Enemy hit points (optional)"
+)
+async def add_enemy_command(interaction: discord.Interaction, name: str, initiative: int, hp: Optional[int] = None):
+    """Add enemy to combat"""
+    try:
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        if not COMBAT_AVAILABLE:
+            await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+            return
+        
+        combat = get_combat_integration()
+        if not combat:
+            await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+            return
+        
+        # Add enemy to combat
+        success = await combat.add_enemy_to_combat(interaction.channel.id, name, initiative, hp)
+        
+        if success:
+            embed = discord.Embed(
+                title="👹 Enemy Added!",
+                description=f"**{name}** has been added to combat.",
+                color=0xFF4500
+            )
+            
+            embed.add_field(
+                name="⚔️ Enemy Stats",
+                value=f"**Initiative:** {initiative}\n**HP:** {hp or 'Unknown'}",
+                inline=True
+            )
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(f"❌ Failed to add enemy: {name}", ephemeral=True)
+            
+    except Exception as e:
+        print(f"❌ Error in add_enemy_command: {e}")
+        await interaction.response.send_message(f"❌ Error adding enemy: {e}", ephemeral=True)
+
+@bot.tree.command(name="next_turn", description="Advance to next turn (Admin only)")
+async def next_turn_command(interaction: discord.Interaction):
+    """Advance to next turn"""
+    try:
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        if not COMBAT_AVAILABLE:
+            await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+            return
+        
+        combat = get_combat_integration()
+        if not combat:
+            await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+            return
+        
+        success = await combat.advance_turn(interaction.channel.id)
+        
+        if success:
+            combat_manager = combat.get_combat_manager(interaction.channel.id)
+            current = combat_manager.get_current_combatant()
+            
+            embed = discord.Embed(
+                title="⏭️ Turn Advanced",
+                description=f"Round {combat_manager.round_number}",
+                color=0x4169E1
+            )
+            
+            if current:
+                embed.add_field(
+                    name="👤 Current Turn",
+                    value=f"**{current.name}** ({'Player' if current.is_player else 'NPC'})",
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ No active combat to advance!", ephemeral=True)
+            
+    except Exception as e:
+        print(f"❌ Error in next_turn_command: {e}")
+        await interaction.response.send_message(f"❌ Error advancing turn: {e}", ephemeral=True)
 
 @bot.tree.command(name="end_combat", description="End current combat (Admin only)")
 async def end_combat_command(interaction: discord.Interaction):
-    """End combat"""
-    if not is_admin(interaction):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
-    if not COMBAT_AVAILABLE:
-        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
-        return
-    
-    combat = get_combat_integration()
-    if combat:
+    """FIXED: End combat with proper cleanup"""
+    try:
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        if not COMBAT_AVAILABLE:
+            await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
+            return
+        
+        combat = get_combat_integration()
+        if not combat:
+            await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
+            return
+        
         result = await combat.end_combat(interaction.channel.id)
+        
         if result:
-            await interaction.response.send_message(f"✅ Combat ended! Lasted {result['rounds']} rounds.")
+            embed = discord.Embed(
+                title="✅ Combat Ended",
+                description="The battle has concluded!",
+                color=0x32CD32
+            )
+            
+            embed.add_field(
+                name="📊 Combat Summary",
+                value=f"**Duration:** {result['rounds']} rounds\n**Participants:** {result['combatants']} combatants",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
         else:
-            await interaction.response.send_message("❌ No active combat found!")
+            await interaction.response.send_message("❌ No active combat found!", ephemeral=True)
+            
+    except Exception as e:
+        print(f"❌ Error in end_combat_command: {e}")
+        await interaction.response.send_message(f"❌ Error ending combat: {e}", ephemeral=True)
 
-@bot.tree.command(name="combat_status", description="View current combat status")
+@bot.tree.command(name="combat_status", description="View detailed combat status")
 async def view_combat_status(interaction: discord.Interaction):
-    """View combat status without separate display"""
-    if not COMBAT_AVAILABLE:
-        await interaction.response.send_message("❌ Combat system not available!", ephemeral=True)
-        return
-    
-    combat = get_combat_integration()
-    if not combat:
-        await interaction.response.send_message("❌ Combat system not initialized!", ephemeral=True)
-        return
-    
-    combat_manager = combat.get_combat_manager(interaction.channel.id)
-    
-    if not combat_manager.is_active():
+    """FIXED: View combat status with comprehensive debugging info"""
+    try:
+        if not COMBAT_AVAILABLE:
+            embed = discord.Embed(
+                title="❌ Combat System Unavailable",
+                description="The combat system is not currently loaded.",
+                color=0xFF6B6B
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        combat = get_combat_integration()
+        if not combat:
+            embed = discord.Embed(
+                title="❌ Combat Not Initialized",
+                description="Combat system is loaded but not initialized.",
+                color=0xFF6B6B
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        combat_manager = combat.get_combat_manager(interaction.channel.id)
+        status = combat_manager.get_combat_status()
+        
+        # Create status embed
         embed = discord.Embed(
             title="⚔️ Combat Status",
-            description="No active combat.",
-            color=0x808080
+            description=f"Channel: {interaction.channel.name}",
+            color=0x4169E1 if status.get('phase') == 'active' else 0x808080
+        )
+        
+        # Basic info
+        embed.add_field(
+            name="🎯 Combat State",
+            value=f"**Phase:** {status.get('phase', 'Unknown').title()}\n**Round:** {status.get('round_number', 0)}\n**Turn Index:** {status.get('turn_index', 0)}",
+            inline=True
         )
         
         embed.add_field(
-            name="💡 Starting Combat",
-            value="Combat will start automatically when you take hostile actions or encounter enemies!\n\nJust use `/action` to describe what you do - Donnie will handle the rest with auto-updating displays.",
-            inline=False
+            name="👥 Participants",
+            value=f"**Total:** {status.get('combatants_count', 0)}\n**In Order:** {status.get('initiative_order_count', 0)}",
+            inline=True
         )
         
-        embed.add_field(
-            name="⚡ Enhanced Combat Features",
-            value="• **Auto-Detection**: Combat triggers based on your actions\n• **Continue Buttons**: Anyone can advance the story\n• **Separate Displays**: Auto-updating combat status messages\n• **Initiative Tracking**: Automatic turn order management\n• **Position Tracking**: Distances and battlefield positions",
-            inline=False
+        # Current turn
+        current_name = status.get('current_combatant')
+        if current_name:
+            embed.add_field(
+                name="👤 Current Turn",
+                value=f"**{current_name}**",
+                inline=True
+            )
+        
+        # Show combatants
+        combatants_info = status.get('combatants', {})
+        if combatants_info:
+            combatant_lines = []
+            for cid, info in list(combatants_info.items())[:8]:  # Show max 8
+                player_indicator = "🎭" if info.get('is_player') else "👹"
+                init_text = f"Init: {info.get('initiative', '?')}"
+                hp_text = f"HP: {info.get('hp', '?')}"
+                combatant_lines.append(f"{player_indicator} **{info.get('name', 'Unknown')}** ({init_text}, {hp_text})")
+            
+            embed.add_field(
+                name="🏆 All Combatants",
+                value="\n".join(combatant_lines) if combatant_lines else "None",
+                inline=False
+            )
+            
+            if len(combatants_info) > 8:
+                embed.add_field(
+                    name="ℹ️ Note",
+                    value=f"Showing 8 of {len(combatants_info)} combatants",
+                    inline=False
+                )
+        
+        # Instructions based on state
+        if status.get('phase') == 'setup':
+            embed.add_field(
+                name="📋 Next Steps",
+                value="• Players use `/initiative <roll>` to join\n• Admins can use `/add_enemy` to add opponents\n• Combat starts automatically when ready",
+                inline=False
+            )
+        elif status.get('phase') == 'active':
+            embed.add_field(
+                name="📋 Combat Commands",
+                value="• `/action <what you do>` - Take actions\n• `/next_turn` - Advance turn (Admin)\n• `/end_combat` - End combat (Admin)",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📋 Start Combat",
+                value="Use `/start_combat` (Admin) or have players roll initiative!",
+                inline=False
+            )
+        
+        # Debug info for admins
+        if is_admin(interaction):
+            embed.add_field(
+                name="🔧 Debug Info (Admin Only)",
+                value=f"Manager ID: {id(combat_manager)}\nIntegration ID: {id(combat)}\nError: {status.get('error', 'None')}",
+                inline=False
+            )
+        
+        embed.set_footer(text="Enhanced Combat System • Auto-updating displays")
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        print(f"❌ Critical error in view_combat_status: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            embed = discord.Embed(
+                title="❌ Status Command Failed",
+                description=f"Error getting combat status: {str(e)}",
+                color=0xFF6B6B
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except:
+            pass
+
+@bot.tree.command(name="debug_combat", description="Debug combat system (Admin only)")
+async def debug_combat_system(interaction: discord.Interaction):
+    """Debug combat system"""
+    try:
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="🔧 Combat System Debug",
+            description="Diagnostic information for the combat system",
+            color=0x4169E1
         )
+        
+        # System availability
+        embed.add_field(
+            name="🎯 System Status",
+            value=f"Combat Available: {'✅' if COMBAT_AVAILABLE else '❌'}\nIntegration: {'✅' if get_combat_integration() else '❌'}",
+            inline=True
+        )
+        
+        # Integration details
+        if COMBAT_AVAILABLE:
+            combat = get_combat_integration()
+            if combat:
+                embed.add_field(
+                    name="🔗 Integration Info",
+                    value=f"Active Managers: {len(combat.combat_managers)}\nDisplay Manager: {'✅' if combat.display_manager else '❌'}",
+                    inline=True
+                )
+                
+                # Current channel
+                channel_id = interaction.channel.id
+                if channel_id in combat.combat_managers:
+                    combat_manager = combat.combat_managers[channel_id]
+                    status = combat_manager.get_combat_status()
+                    
+                    embed.add_field(
+                        name="📍 This Channel",
+                        value=f"Phase: {status.get('phase', 'Unknown')}\nCombatants: {status.get('combatants_count', 0)}\nRound: {status.get('round_number', 0)}",
+                        inline=True
+                    )
+                else:
+                    embed.add_field(
+                        name="📍 This Channel",
+                        value="No combat manager found",
+                        inline=True
+                    )
+            else:
+                embed.add_field(
+                    name="❌ Integration Error",
+                    value="Combat integration failed to initialize",
+                    inline=False
+                )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Show basic status
-    status = f"Round {combat_manager.round_number}"
-    current = combat_manager.get_current_combatant()
-    if current:
-        status += f" - {current.name}'s turn"
-    
-    await interaction.response.send_message(f"⚔️ Combat Status: {status}")
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Debug error: {e}", ephemeral=True)
 
 # ====== WORLD INFORMATION COMMANDS ======
 
