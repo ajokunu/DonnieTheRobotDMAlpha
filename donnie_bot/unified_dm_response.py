@@ -34,10 +34,10 @@ class UnifiedDMResponseSystem:
     """
     
     def __init__(self, claude_client, campaign_context: Dict, 
-                 persistent_memory_available: bool = False,
-                 database_operations=None,
-                 max_response_length: int = 550,
-                 response_timeout: float = 10.0):
+                persistent_memory_available: bool = False,
+                database_operations=None,
+                max_response_length: int = 450,
+                response_timeout: float = 8.0):
         
         self.claude_client = claude_client
         self.campaign_context = campaign_context
@@ -50,22 +50,22 @@ class UnifiedDMResponseSystem:
         self.response_count = {"enhanced_memory": 0, "streamlined": 0, "basic_fallback": 0, "emergency_fallback": 0}
         self.total_requests = 0
         
-        # Initialize enhanced memory system if available
-        self.enhanced_dm_system = None
-        if persistent_memory_available:
-            try:
-                from enhanced_dm_system import EnhancedMemoryManager
-                self.enhanced_dm_system = EnhancedMemoryManager(
-                    claude_client, campaign_context, database_operations
-                )
-                print("✅ Enhanced memory system initialized in unified response system")
-            except Exception as e:
-                print(f"⚠️ Failed to initialize enhanced memory system: {e}")
+        # FIXED: Use the real memory operations instead of deprecated enhanced_dm_system
+        self.memory_ops = None
+        if persistent_memory_available and database_operations:
+            if hasattr(database_operations, 'memory_ops') and database_operations.memory_ops:
+                self.memory_ops = database_operations.memory_ops
+                print("✅ Real memory operations connected to unified response system")
+            else:
+                print("⚠️ Database operations available but no memory_ops found")
                 self.persistent_memory_available = False
+        else:
+            print("⚠️ Memory operations not available")
+            self.persistent_memory_available = False
         
         # Storm King's Thunder specific context
         self.campaign_prompts = {
-            "setting_context": "The Sword Coast during the giant crisis. The ancient ordning that kept giant society in check has collapsed, throwing giantkind into chaos. Specifically Storm Kings thunder the campaign module",
+            "setting_context": "The Sword Coast during the giant crisis. The ancient ordning that kept giant society in check has collapsed, throwing giantkind into chaos.",
             "threat_level": "Giants of all types roam the land unchecked, raiding settlements and terrorizing the small folk.",
             "tone": "Epic fantasy adventure with real consequences and meaningful choices."
         }
@@ -73,7 +73,7 @@ class UnifiedDMResponseSystem:
         print(f"🎯 Unified DM Response System initialized (Memory: {'✅' if self.persistent_memory_available else '❌'})")
     
     async def generate_dm_response(self, user_id: str, player_input: str, 
-                                 guild_id: str, episode_id: int) -> Tuple[str, ResponseMode]:
+                                guild_id: str, episode_id: int) -> Tuple[str, ResponseMode]:
         """
         MAIN ENTRY POINT: Generate DM response using unified system
         
@@ -106,7 +106,7 @@ class UnifiedDMResponseSystem:
         print(f"🎯 Unified Response: {character_name} in guild {guild_id}: '{player_input[:50]}...'")
         
         # Try Enhanced Memory first (if available)
-        if self.persistent_memory_available and self.enhanced_dm_system:
+        if self.persistent_memory_available and self.memory_ops:
             try:
                 print("🧠 Attempting enhanced memory response...")
                 response = await asyncio.wait_for(
@@ -159,14 +159,67 @@ class UnifiedDMResponseSystem:
         return response, ResponseMode.BASIC_FALLBACK
     
     async def _generate_enhanced_memory_response(self, user_id: str, player_input: str, 
-                                               guild_id: str, episode_id: int, 
-                                               character_name: str) -> str:
-        """Generate response with enhanced memory context"""
+                                        guild_id: str, episode_id: int, 
+                                        character_name: str) -> str:
+        """Generate response with enhanced memory context using REAL memory operations"""
         
-        # Get memory context from enhanced system
-        memory_context = await self.enhanced_dm_system.build_memory_context(
-            guild_id, player_input, character_name, max_memories=3
-        )
+        if not self.memory_ops:
+            raise Exception("Memory operations not available")
+        
+        # Get memory context using REAL memory operations
+        try:
+            # Get relevant memories
+            memories = await self.memory_ops.retrieve_relevant_memories(
+                campaign_id=guild_id,
+                query=player_input,
+                max_memories=3,
+                min_importance=0.4
+            )
+            
+            # Get important NPCs
+            npcs = await self.memory_ops.get_campaign_npcs(guild_id, "important")
+            
+            # Build memory context
+            memory_context = {
+                "relevant_memories": [
+                    {
+                        "character": getattr(mem, 'character_name', 'Unknown'),
+                        "summary": getattr(mem, 'summary', str(mem)[:100]),
+                        "importance": getattr(mem, 'importance_score', 0.5),
+                        "scene_context": getattr(mem, 'scene_context', '')
+                    }
+                    for mem in memories[:3]
+                ],
+                "active_npcs": [
+                    {
+                        "name": getattr(npc, 'name', 'Unknown NPC'),
+                        "personality": getattr(npc, 'personality_summary', 'Mysterious'),
+                        "relationship": getattr(npc, 'relationship_with_party', 'Unknown'),
+                        "location": getattr(npc, 'current_location', 'Unknown'),
+                        "status": getattr(npc, 'status', 'Active')
+                    }
+                    for npc in npcs[:3]
+                ],
+                "recent_events": []
+            }
+            
+            # Add recent session history
+            recent_history = self.campaign_context.get("session_history", [])[-3:]
+            memory_context["recent_events"] = [
+                f"{entry.get('player', 'Unknown')}: {entry.get('action', '')}"
+                for entry in recent_history
+            ]
+            
+            print(f"🧠 Retrieved {len(memories)} memories and {len(npcs)} NPCs")
+            
+        except Exception as e:
+            print(f"⚠️ Memory retrieval error: {e}")
+            # Fallback to basic context
+            memory_context = {
+                "relevant_memories": [],
+                "active_npcs": [],
+                "recent_events": []
+            }
         
         # Build enhanced prompt with memory
         prompt = self._build_enhanced_memory_prompt(
@@ -178,7 +231,7 @@ class UnifiedDMResponseSystem:
             None,
             lambda: self.claude_client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=min(500, self.max_response_length // 3),
+                max_tokens=min(300, self.max_response_length // 3),
                 temperature=0.8,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -223,39 +276,38 @@ class UnifiedDMResponseSystem:
                 for entry in recent_history
             ])
         
-        # Build streamlined prompt
         # Build streamlined prompt (fix f-string backslash issue)
         recent_context_section = f"**RECENT CONTEXT**:\n{recent_context}" if recent_context else ""
 
         prompt = f"""You are AlphaDonnie, experienced DM for Storm King's Thunder D&D 5e 2024.
 
-                **SETTING**: {self.campaign_prompts['setting_context']}
+**SETTING**: {self.campaign_prompts['setting_context']}
 
-                **CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:500]}
+**CURRENT SCENE**: {self.campaign_context.get('current_scene', 'Adventure continues')[:500]}
 
-                **PARTY**: {', '.join(party_info)}
+**PARTY**: {', '.join(party_info)}
 
-                **THREAT LEVEL**: {self.campaign_prompts['threat_level']}
+**THREAT LEVEL**: {self.campaign_prompts['threat_level']}
 
-                {recent_context_section}
-                
-                **DM GUIDELINES**:
-                - Follow D&D 5th Edition 2024 rules precisely
-                - Use current scene as starting point
-                - Progress story naturally when players move or investigate
-                - Ask for dice rolls when rules require them
-                - Make consequences meaningful in this giant-threatened world
-                - Keep responses under {self.max_response_length} characters
-                - Create immersive, dramatic moments
-                - Be fair and consistent with rules and ensure players follow the 2024 ruleset
-                - NPCs should have distinct personalities and relationships shaped by the giant crisis
-                - Combat should be well defined, with clear turn order and actions. 
-                - Combat should be difficult but fair.
+{recent_context_section}
 
-                **PLAYER ACTION**: {character_name}: {player_input}
+**DM GUIDELINES**:
+- Follow D&D 5th Edition 2024 rules precisely
+- Use current scene as starting point
+- Progress story naturally when players move or investigate
+- Ask for dice rolls when rules require them
+- Make consequences meaningful in this giant-threatened world
+- Keep responses under {self.max_response_length} characters
+- Create immersive, dramatic moments
+- Be fair and consistent with rules and ensure players follow the 2024 ruleset
+- NPCs should have distinct personalities and relationships shaped by the giant crisis
+- Combat should be well defined, with clear turn order and actions. 
+- Combat should be difficult but fair.
 
-                **DM RESPONSE** (under {self.max_response_length} chars, maintain epic tone):
-                """
+**PLAYER ACTION**: {character_name}: {player_input}
+
+**DM RESPONSE** (under {self.max_response_length} chars, maintain epic tone):
+"""
         
         # Single Claude API call
         response = await asyncio.get_event_loop().run_in_executor(
@@ -463,19 +515,38 @@ class UnifiedDMResponseSystem:
     async def store_interaction_memory(self, guild_id: str, episode_id: int, 
                                      user_id: str, player_input: str, 
                                      dm_response: str) -> bool:
-        """Store interaction in memory system (background task)"""
+        """Store interaction in memory system using REAL operations"""
         
-        if not self.persistent_memory_available or not self.enhanced_dm_system:
+        if not self.persistent_memory_available or not self.memory_ops:
             return False
         
         try:
-            return await self.enhanced_dm_system.store_interaction_memory(
-                guild_id=str(guild_id),
+            # Get character info
+            if user_id not in self.campaign_context.get("players", {}):
+                print(f"❌ User {user_id} not in campaign context")
+                return False
+            
+            player_data = self.campaign_context["players"][user_id]
+            char_data = player_data["character_data"]
+            character_name = char_data["name"]
+            
+            # Store using REAL memory operations
+            result = await self.memory_ops.store_conversation_memory(
+                campaign_id=str(guild_id),
                 episode_id=episode_id,
                 user_id=user_id,
+                character_name=character_name,
                 player_input=player_input,
                 dm_response=dm_response
             )
+            
+            if result:
+                print(f"✅ Stored memory for {character_name}")
+            else:
+                print(f"⚠️ Failed to store memory for {character_name}")
+            
+            return bool(result)
+            
         except Exception as e:
             print(f"❌ Memory storage error: {e}")
             return False
@@ -494,7 +565,7 @@ class UnifiedDMResponseSystem:
             enhanced_rate = streamlined_rate = fallback_rate = emergency_rate = 0
         
         status = {
-            "enhanced_memory": f"{'✅ Available' if (self.persistent_memory_available and self.enhanced_dm_system) else '❌ Not Available'} ({enhanced_rate:.1f}%)",
+            "enhanced_memory": f"{'✅ Available' if (self.persistent_memory_available and self.memory_ops) else '❌ Not Available'} ({enhanced_rate:.1f}%)",
             "streamlined": f"✅ Available ({streamlined_rate:.1f}%)",
             "basic_fallback": f"✅ Available ({fallback_rate:.1f}%)",
             "emergency_fallback": f"✅ Available ({emergency_rate:.1f}%)",

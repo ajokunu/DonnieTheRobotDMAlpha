@@ -55,45 +55,93 @@ def get_voice_channel(interaction: discord.Interaction):
     if not interaction.user.voice:
         return None
     return interaction.user.voice.channel
+
 # ====== Memory System Adapter ======
+
 class MemoryDatabaseAdapter:
-    """FIXED: Adapter to provide memory operations interface"""
+    """Adapter that uses real memory operations"""
     
     def __init__(self, episode_ops, character_ops, guild_ops):
         self.episode_ops = episode_ops
         self.character_ops = character_ops
         self.guild_ops = guild_ops
         self.initialized = DATABASE_AVAILABLE
+        
+        # Initialize the REAL memory operations
+        self.memory_ops = None
+        if DATABASE_AVAILABLE:
+            try:
+                from database.memory_operations import AdvancedMemoryOperations
+                self.memory_ops = AdvancedMemoryOperations(claude_client)
+                print("✅ Real memory operations initialized!")
+            except Exception as e:
+                print(f"❌ Failed to initialize memory operations: {e}")
+                self.memory_ops = None
+                self.initialized = False
+        
         print(f"✅ Memory database adapter created (Available: {self.initialized})")
     
     async def store_conversation_memory(self, campaign_id: str, episode_id: int, 
                                       user_id: str, character_name: str, 
                                       player_input: str, dm_response: str, **kwargs) -> bool:
-        """Store conversation memory using existing database operations"""
-        if not self.initialized:
+        """Store conversation memory using REAL database operations"""
+        if not self.initialized or not self.memory_ops:
+            print("⚠️ Memory operations not available")
             return False
+        
         try:
-            # For now, just return True since unified system handles this
-            return True
+            # Use the REAL memory operations
+            result = await self.memory_ops.store_conversation_memory(
+                campaign_id=campaign_id,
+                episode_id=episode_id,
+                user_id=user_id,
+                character_name=character_name,
+                player_input=player_input,
+                dm_response=dm_response
+            )
+            
+            if result:
+                print(f"✅ Stored memory for {character_name}")
+            return bool(result)
+            
         except Exception as e:
             print(f"❌ Error storing conversation memory: {e}")
             return False
     
     async def retrieve_relevant_memories(self, campaign_id: str, query: str, 
                                        max_memories: int = 5, **kwargs) -> list:
-        """Retrieve relevant memories - simplified version"""
-        if not self.initialized:
+        """Retrieve relevant memories using REAL database operations"""
+        if not self.initialized or not self.memory_ops:
             return []
+        
         try:
-            # Return empty list for now - unified system handles this
-            return []
+            # Use the REAL memory operations
+            memories = await self.memory_ops.retrieve_relevant_memories(
+                campaign_id=campaign_id,
+                query=query,
+                max_memories=max_memories,
+                min_importance=kwargs.get('min_importance', 0.4)
+            )
+            
+            print(f"✅ Retrieved {len(memories)} memories for query: {query[:50]}...")
+            return memories
+            
         except Exception as e:
             print(f"❌ Error retrieving memories: {e}")
             return []
     
     async def get_campaign_npcs(self, campaign_id: str, importance: str = "important") -> list:
-        """Get campaign NPCs - mock implementation"""
-        return []
+        """Get campaign NPCs using REAL database operations"""
+        if not self.initialized or not self.memory_ops:
+            return []
+        
+        try:
+            npcs = await self.memory_ops.get_campaign_npcs(campaign_id, importance)
+            print(f"✅ Retrieved {len(npcs)} NPCs")
+            return npcs
+        except Exception as e:
+            print(f"❌ Error retrieving NPCs: {e}")
+            return []
 
 # ====== DATABASE HELPER FUNCTIONS ======
 def update_database_from_campaign_context(guild_id: str):
@@ -921,30 +969,65 @@ async def add_to_voice_queue(guild_id: int, text: str, player_name: str, message
 @bot.event
 async def on_ready():
     """FIXED: Proper initialization order with global variable handling"""
-    global episode_commands, character_progression, unified_response_system_instance, memory_database_adapter, DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE, CHARACTER_PROGRESSION_AVAILABLE, UNIFIED_RESPONSE_AVAILABLE, PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
-    # Ensure all global variables are initialized
+    # ✅ CRITICAL: Declare ALL global variables at the start
+    global episode_commands, character_progression, unified_response_system_instance
+    global memory_database_adapter, DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE
+    global CHARACTER_PROGRESSION_AVAILABLE, UNIFIED_RESPONSE_AVAILABLE
+    global PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
+    
     print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
     print(f'🏔️ Giants threaten the Sword Coast!')
     print(f'🎤 Donnie the DM is ready to speak!')
     print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
-    print(f'🧠 Enhanced Memory System: {"✅ Active" if PERSISTENT_MEMORY_AVAILABLE else "❌ Disabled"}')
     
-    # ====== FIXED DATABASE INITIALIZATION ======
+    # ====== DATABASE INITIALIZATION WITH ENHANCED SCHEMA ======
     if DATABASE_AVAILABLE:
         try:
-            print("🔄 Initializing database...")
-            init_database()
-            print("✅ Database initialized successfully")
+            print("🔄 Initializing database with enhanced memory schema...")
             
-            # Create memory adapter
+            # Step 1: Initialize core database
+            init_database()
+            print("✅ Core database initialized")
+            
+            # Step 2: Upgrade to enhanced memory schema
+            try:
+                from database.enhanced_schema import upgrade_database_schema
+                upgrade_database_schema()
+                print("✅ Enhanced memory schema upgraded successfully")
+            except Exception as e:
+                print(f"⚠️ Enhanced schema upgrade failed: {e}")
+                # Continue with core database only
+            
+            # Step 3: Create REAL memory adapter
             memory_database_adapter = MemoryDatabaseAdapter(
                 EpisodeOperations, CharacterOperations, GuildOperations
             )
+            print("✅ Real memory adapter initialized")
             
-            # Test database health
+            # Step 4: Test database health
             if health_check():
                 stats = get_database_stats()
                 print(f"📊 Database stats: {stats}")
+                
+                # Test memory tables
+                try:
+                    from database.database import get_db_connection
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    
+                    # Check if enhanced memory tables exist
+                    memory_tables = ['conversation_memories', 'npc_memories', 'memory_consolidation']
+                    for table in memory_tables:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                        if cursor.fetchone():
+                            print(f"✅ Memory table '{table}' exists")
+                        else:
+                            print(f"❌ Memory table '{table}' missing")
+                    
+                    conn.close()
+                    
+                except Exception as e:
+                    print(f"⚠️ Memory table check failed: {e}")
             else:
                 print("⚠️ Database health check failed")
                 
@@ -956,19 +1039,28 @@ async def on_ready():
         print("⚠️ Database features disabled")
         memory_database_adapter = None
     
-    # ====== UNIFIED RESPONSE SYSTEM INITIALIZATION WITH UNIFIED RESPONSE ======
+    # ====== FIXED UNIFIED RESPONSE SYSTEM INITIALIZATION ======
     if UNIFIED_RESPONSE_AVAILABLE:
         try:
-            print("🔄 Initializing unified response system...")
+            print("🔄 Initializing unified response system with REAL memory...")
+            
+            # Check if we have real memory operations
+            memory_available = (DATABASE_AVAILABLE and 
+                              memory_database_adapter and 
+                              hasattr(memory_database_adapter, 'memory_ops') and 
+                              memory_database_adapter.memory_ops is not None)
+            
             unified_response_system_instance = initialize_unified_response_system(
                 claude_client=claude_client,
                 campaign_context=campaign_context,
-                persistent_memory_available=PERSISTENT_MEMORY_AVAILABLE,
-                database_operations=memory_database_adapter if DATABASE_AVAILABLE else None,
+                persistent_memory_available=memory_available,
+                database_operations=memory_database_adapter,
                 max_response_length=MAX_RESPONSE_LENGTH,
                 response_timeout=RESPONSE_TIMEOUT
             )
-            print("🎯 Unified DM Response System initialized successfully!")
+            
+            print(f"🎯 Unified DM Response System initialized with memory: {'✅' if memory_available else '❌'}")
+            
         except Exception as e:
             print(f"❌ Failed to initialize unified response system: {e}")
             import traceback
@@ -1088,6 +1180,104 @@ async def on_ready():
         print(f'❌ Failed to sync commands: {e}')
         import traceback
         traceback.print_exc()
+
+@bot.tree.command(name="debug_memory_detailed", description="Detailed memory system diagnostics (Admin only)")
+async def debug_memory_detailed(interaction: discord.Interaction):
+    """FIXED: Comprehensive memory system diagnostics"""
+    
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        return
+    
+    guild_id = str(interaction.guild.id)
+    
+    embed = discord.Embed(
+        title="🔍 Detailed Memory System Diagnostics",
+        description="Comprehensive analysis of memory system components",
+        color=0x4169E1
+    )
+    
+    # Check database availability
+    db_status = "✅ Available" if DATABASE_AVAILABLE else "❌ Not Available"
+    embed.add_field(name="💾 Database", value=db_status, inline=True)
+    
+    # Check memory adapter
+    if memory_database_adapter:
+        adapter_status = f"✅ Initialized (Real ops: {'✅' if hasattr(memory_database_adapter, 'memory_ops') and memory_database_adapter.memory_ops else '❌'})"
+    else:
+        adapter_status = "❌ Not Initialized"
+    embed.add_field(name="🔌 Memory Adapter", value=adapter_status, inline=True)
+    
+    # Check unified response system
+    if unified_response_system_instance:
+        unified_status = f"✅ Active (Memory: {'✅' if unified_response_system_instance.persistent_memory_available else '❌'})"
+    else:
+        unified_status = "❌ Not Active"
+    embed.add_field(name="🎯 Unified Response", value=unified_status, inline=True)
+    
+    # Check memory tables
+    if DATABASE_AVAILABLE:
+        try:
+            from database.database import get_db_connection
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            table_status = []
+            memory_tables = ['conversation_memories', 'npc_memories', 'memory_consolidation', 'world_state']
+            
+            for table in memory_tables:
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE campaign_id = ?", (guild_id,))
+                    count = cursor.fetchone()[0]
+                    table_status.append(f"✅ {table}: {count} records")
+                except:
+                    table_status.append(f"❌ {table}: missing/error")
+            
+            embed.add_field(
+                name="📊 Memory Tables",
+                value="\n".join(table_status),
+                inline=False
+            )
+            
+            conn.close()
+            
+        except Exception as e:
+            embed.add_field(name="📊 Memory Tables", value=f"❌ Error: {e}", inline=False)
+    
+    # Test memory operations
+    if memory_database_adapter and hasattr(memory_database_adapter, 'memory_ops') and memory_database_adapter.memory_ops:
+        try:
+            # Test store operation
+            test_result = await memory_database_adapter.store_conversation_memory(
+                campaign_id=guild_id,
+                episode_id=1,
+                user_id="test",
+                character_name="Test Character",
+                player_input="Test input",
+                dm_response="Test response"
+            )
+            
+            store_status = "✅ Working" if test_result else "❌ Failed"
+            
+            # Test retrieve operation  
+            memories = await memory_database_adapter.retrieve_relevant_memories(
+                campaign_id=guild_id,
+                query="test",
+                max_memories=1
+            )
+            
+            retrieve_status = f"✅ Working ({len(memories)} results)" if isinstance(memories, list) else "❌ Failed"
+            
+            embed.add_field(
+                name="🧪 Memory Operations Test",
+                value=f"Store: {store_status}\nRetrieve: {retrieve_status}",
+                inline=True
+            )
+            
+        except Exception as e:
+            embed.add_field(name="🧪 Memory Operations Test", value=f"❌ Error: {e}", inline=True)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ====== BOT DISCONNECT HANDLER ======
 @bot.event
