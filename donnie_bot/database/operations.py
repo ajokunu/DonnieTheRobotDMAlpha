@@ -578,11 +578,11 @@ class StoryOperations:
             raise DatabaseOperationError(f"Failed to get story notes: {e}")
 
 class GuildOperations:
-    """Handle guild-specific settings"""
+    """Handle guild-specific settings - FIXED sqlite3.Row compatibility"""
     
     @staticmethod
     def update_guild_settings(guild_id: str, **settings) -> bool:
-        """Update guild settings"""
+        """Update guild settings - ✅ FIXED: Now supports current_scene"""
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -592,12 +592,17 @@ class GuildOperations:
             exists = cursor.fetchone()
             
             if exists:
-                # Update existing
+                # Update existing - ✅ FIXED: Handle current_scene in updates
                 set_clauses = []
                 values = []
+                
+                # Handle all possible settings including current_scene
+                allowed_settings = ['current_episode', 'voice_speed', 'voice_quality', 'tts_enabled', 'current_scene']
+                
                 for key, value in settings.items():
-                    set_clauses.append(f"{key} = ?")
-                    values.append(value)
+                    if key in allowed_settings:
+                        set_clauses.append(f"{key} = ?")
+                        values.append(value)
                 
                 if set_clauses:
                     set_clauses.append("updated_at = ?")
@@ -606,16 +611,19 @@ class GuildOperations:
                     
                     query = f"UPDATE guild_settings SET {', '.join(set_clauses)} WHERE guild_id = ?"
                     cursor.execute(query, values)
+                    logger.info(f"✅ Updated guild settings for {guild_id}: {list(settings.keys())}")
             else:
-                # Insert new
+                # Insert new - ✅ FIXED: Include current_scene in initial insert
                 cursor.execute('''
-                    INSERT INTO guild_settings (guild_id, current_episode, voice_speed, voice_quality, tts_enabled)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO guild_settings (guild_id, current_episode, voice_speed, voice_quality, tts_enabled, current_scene)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 ''', (guild_id, 
                       settings.get('current_episode', 0),
                       settings.get('voice_speed', 1.25),
                       settings.get('voice_quality', 'smart'),
-                      settings.get('tts_enabled', False)))
+                      settings.get('tts_enabled', False),
+                      settings.get('current_scene', '')))  # ✅ NEW: Include current_scene
+                logger.info(f"✅ Created new guild settings for {guild_id}")
             
             conn.commit()
             return True
@@ -623,10 +631,14 @@ class GuildOperations:
         except Exception as e:
             logger.error(f"❌ Error updating guild settings: {e}")
             raise DatabaseOperationError(f"Failed to update guild settings: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     @staticmethod
     def get_guild_settings(guild_id: str) -> Dict:
-        """Get guild settings"""
+        """Get guild settings - ✅ FIXED: Proper sqlite3.Row handling"""
+        conn = None
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -635,12 +647,21 @@ class GuildOperations:
             row = cursor.fetchone()
             
             if not row:
+                # Return defaults including current_scene
                 return {
                     'current_episode': 0,
                     'voice_speed': 1.25,
                     'voice_quality': 'smart',
-                    'tts_enabled': False
+                    'tts_enabled': False,
+                    'current_scene': ''  # ✅ NEW: Include in defaults
                 }
+            
+            # ✅ FIXED: Handle sqlite3.Row properly - no .get() method available
+            # Use try/except for accessing columns that might not exist
+            try:
+                current_scene = row['current_scene'] if 'current_scene' in row.keys() else ''
+            except (KeyError, IndexError):
+                current_scene = ''
             
             return {
                 'guild_id': row['guild_id'],
@@ -648,6 +669,7 @@ class GuildOperations:
                 'voice_speed': row['voice_speed'],
                 'voice_quality': row['voice_quality'],
                 'tts_enabled': bool(row['tts_enabled']),
+                'current_scene': current_scene,  # ✅ FIXED: Use safe access
                 'created_at': row['created_at'],
                 'updated_at': row['updated_at']
             }
@@ -655,3 +677,25 @@ class GuildOperations:
         except Exception as e:
             logger.error(f"❌ Error getting guild settings: {e}")
             raise DatabaseOperationError(f"Failed to get guild settings: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    @staticmethod
+    def get_guild_scene(guild_id: str) -> str:
+        """Get just the current scene for a guild - ✅ NEW: Convenience method"""
+        try:
+            settings = GuildOperations.get_guild_settings(guild_id)
+            return settings.get('current_scene', '')
+        except Exception as e:
+            logger.error(f"❌ Error getting guild scene: {e}")
+            return ''
+    
+    @staticmethod
+    def update_guild_scene(guild_id: str, scene: str) -> bool:
+        """Update just the current scene for a guild - ✅ NEW: Convenience method"""
+        try:
+            return GuildOperations.update_guild_settings(guild_id, current_scene=scene)
+        except Exception as e:
+            logger.error(f"❌ Error updating guild scene: {e}")
+            return False

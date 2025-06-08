@@ -1,4 +1,4 @@
-# database/database.py
+# database/database.py - UPDATED VERSION WITH current_scene COLUMN
 import sqlite3
 import threading
 from pathlib import Path
@@ -42,6 +42,42 @@ def test_connection():
     except Exception as e:
         logger.error(f"❌ Database connection test failed: {e}")
         return False
+
+def migrate_guild_settings_add_current_scene():
+    """Migration: Add current_scene column to guild_settings if it doesn't exist"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        logger.info("🔄 Checking if current_scene column exists in guild_settings...")
+        
+        # Check if column already exists
+        cursor.execute("PRAGMA table_info(guild_settings)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'current_scene' not in columns:
+            logger.info("Adding current_scene column to guild_settings...")
+            cursor.execute('ALTER TABLE guild_settings ADD COLUMN current_scene TEXT DEFAULT ""')
+            conn.commit()
+            logger.info("✅ Successfully added current_scene column to guild_settings")
+        else:
+            logger.info("✅ current_scene column already exists in guild_settings")
+            
+    except sqlite3.Error as e:
+        logger.error(f"❌ Migration error: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected migration error: {e}")
+        raise
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 def init_database():
     """Initialize the database with all required tables"""
@@ -115,7 +151,7 @@ def init_database():
             )
         ''')
         
-        # Guild settings - Per-server configuration
+        # Guild settings - Per-server configuration - ✅ FIXED: Added current_scene column
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id TEXT PRIMARY KEY,
@@ -123,6 +159,7 @@ def init_database():
                 voice_speed REAL DEFAULT 1.25,
                 voice_quality TEXT DEFAULT 'smart',
                 tts_enabled BOOLEAN DEFAULT FALSE,
+                current_scene TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -139,12 +176,24 @@ def init_database():
         conn.commit()
         logger.info("✅ Database schema initialized successfully")
         
+        # ✅ NEW: Run migration for existing databases
+        logger.info("🔄 Running database migrations...")
+        migrate_guild_settings_add_current_scene()
+        
         # Log table creation
         tables = ['episodes', 'character_snapshots', 'character_progression', 'story_notes', 'guild_settings']
         for table in tables:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             count = cursor.fetchone()[0]
             logger.info(f"📊 Table '{table}': {count} records")
+        
+        # ✅ NEW: Verify current_scene column exists
+        cursor.execute("PRAGMA table_info(guild_settings)")
+        guild_columns = [row[1] for row in cursor.fetchall()]
+        if 'current_scene' in guild_columns:
+            logger.info("✅ current_scene column verified in guild_settings")
+        else:
+            logger.error("❌ current_scene column still missing from guild_settings!")
         
     except sqlite3.Error as e:
         logger.error(f"❌ Database initialization error: {e}")
@@ -220,6 +269,11 @@ def get_database_stats():
         if result:
             stats["database_size_bytes"] = result[0]
         
+        # ✅ NEW: Verify current_scene column
+        cursor.execute("PRAGMA table_info(guild_settings)")
+        guild_columns = [row[1] for row in cursor.fetchall()]
+        stats["current_scene_column_exists"] = 'current_scene' in guild_columns
+        
         return stats
     except Exception as e:
         logger.error(f"Error getting database stats: {e}")
@@ -268,7 +322,12 @@ def health_check():
             cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
             table_count = cursor.fetchone()[0]
             
-            logger.info(f"✅ Database health check passed ({table_count} tables found)")
+            # ✅ NEW: Test current_scene column
+            cursor.execute("PRAGMA table_info(guild_settings)")
+            guild_columns = [row[1] for row in cursor.fetchall()]
+            current_scene_exists = 'current_scene' in guild_columns
+            
+            logger.info(f"✅ Database health check passed ({table_count} tables found, current_scene: {'✅' if current_scene_exists else '❌'})")
             return True
         else:
             logger.error("❌ Database health check failed - unexpected result")
