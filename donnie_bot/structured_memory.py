@@ -11,7 +11,7 @@ class StructuredMemoryBuilder:
         
         # Import validator safely
         try:
-            from .memory_validator import MemoryValidator
+            from memory_validator import MemoryValidator
             self.validator = MemoryValidator()
             print("✅ Memory validator loaded")
         except ImportError:

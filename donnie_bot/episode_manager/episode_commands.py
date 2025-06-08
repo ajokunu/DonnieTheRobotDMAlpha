@@ -55,15 +55,16 @@ class EpisodeCommands:
     """FIXED: Enhanced Episode Management with proper initialization and error handling"""
     
     def __init__(self, bot: commands.Bot, campaign_context: Dict, voice_clients: Dict,
-                 tts_enabled: Dict, add_to_voice_queue_func: Callable,
-                 episode_operations=None, character_operations=None, guild_operations=None,
-                 claude_client=None, sync_function=None):
+             tts_enabled: Dict, add_to_voice_queue_func: Callable,
+             episode_operations=None, character_operations=None, guild_operations=None,
+             claude_client=None, sync_function=None, unified_response_system=None):
         
         self.bot = bot
         self.campaign_context = campaign_context
         self.voice_clients = voice_clients
         self.tts_enabled = tts_enabled
         self.add_to_voice_queue = add_to_voice_queue_func
+        self.unified_response_system = unified_response_system
         
         # Store database operations classes with fallbacks
         self.episode_ops = episode_operations or EpisodeOperations
@@ -77,41 +78,14 @@ class EpisodeCommands:
         # Track if commands have been registered for this bot instance
         self.commands_registered = False
         
-        # Initialize enhanced memory if available
-        self.enhanced_memory = None
-        if PERSISTENT_MEMORY_AVAILABLE and claude_client:
-            try:
-                self.enhanced_memory = EnhancedMemoryManager(
-                    claude_client, campaign_context, 
-                    {'store_conversation_memory': self._mock_store_memory,
-                     'retrieve_relevant_memories': self._mock_retrieve_memories,
-                     'get_campaign_npcs': self._mock_get_npcs}
-                )
-                print("✅ Episode commands: Enhanced memory initialized")
-            except Exception as e:
-                print(f"⚠️ Episode commands: Enhanced memory failed: {e}")
-                self.enhanced_memory = None
-        
         # Register commands
         self._register_commands()
         
         print(f"✅ Episode Commands initialized")
         print(f"🔄 State Sync: {'✅' if self.sync_function else '❌'}")
-        print(f"🧠 Memory Consolidation: {'✅' if self.enhanced_memory else '❌'}")
+        print(f"🧠 Memory Consolidation: {'✅' if self.unified_response_system else '❌'}")
         print(f"🤖 Claude Client: {'✅' if self.claude_client else '❌'}")
         print(f"📊 Database: {'✅' if DATABASE_AVAILABLE else '❌'}")
-    
-    def _mock_store_memory(self, *args, **kwargs):
-        """Mock memory storage for compatibility"""
-        return True
-    
-    def _mock_retrieve_memories(self, *args, **kwargs):
-        """Mock memory retrieval for compatibility"""
-        return []
-    
-    def _mock_get_npcs(self, *args, **kwargs):
-        """Mock NPC retrieval for compatibility"""
-        return []
     
     def _register_commands(self):
         """FIXED: Register commands with proper error handling and no duplicate registration"""
@@ -431,17 +405,22 @@ class EpisodeCommands:
             
             # Memory consolidation
             memory_consolidation_result = None
-            if DATABASE_AVAILABLE and current_episode and self.enhanced_memory and self.claude_client:
+            if DATABASE_AVAILABLE and current_episode and self.unified_response_system:
                 try:
                     print(f"🧠 Consolidating memories for episode {episode_number}")
-                    memory_consolidation_result = await self.enhanced_memory.consolidate_episode_memories(
-                        guild_id, current_episode.id
-                    )
                     
-                    if memory_consolidation_result:
-                        print(f"✅ Episode {episode_number} memories consolidated")
+                    # Use unified system's memory operations
+                    if hasattr(self.unified_response_system, 'memory_ops') and self.unified_response_system.memory_ops:
+                        memory_consolidation_result = await self.unified_response_system.memory_ops.consolidate_episode_memories(
+                            guild_id, current_episode.id
+                        )
+                        
+                        if memory_consolidation_result:
+                            print(f"✅ Episode {episode_number} memories consolidated via unified system")
+                        else:
+                            print(f"⚠️ No memories to consolidate for episode {episode_number}")
                     else:
-                        print(f"⚠️ No memories to consolidate for episode {episode_number}")
+                        print("⚠️ Memory operations not available in unified system")
                         
                 except Exception as e:
                     print(f"⚠️ Memory consolidation failed: {e}")

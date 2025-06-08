@@ -64,7 +64,7 @@ class EnhancedMemoryManager:
             "factions": ["harpers", "emerald enclave", "lords alliance", "order of the gauntlet", "zhentarim"]
         }
         
-        print(f"🧠 Enhanced Memory Manager initialized (Memory: {'✅' if self.memory_available else '❌'})")
+        print(f"🧠 Enhanced Memory Manager initialized (Memory: {'✅' if self.memory_available else 'Legacy Code Active but not broken'})")
     
     async def build_memory_context(self, campaign_id: str, player_input: str, 
                                  character_name: str, max_memories: int = 3) -> Dict[str, Any]:

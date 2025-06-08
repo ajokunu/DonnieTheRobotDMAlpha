@@ -1172,7 +1172,8 @@ async def on_ready():
                 character_operations=CharacterOperations,
                 guild_operations=GuildOperations,
                 claude_client=claude_client,
-                sync_function=sync_campaign_context_with_database
+                sync_function=sync_campaign_context_with_database,
+                unified_response_system=unified_response_system_instance
             )
             print("✅ Episode management system initialized with database support")
         except Exception as e:
@@ -3878,8 +3879,8 @@ if __name__ == "__main__":
         input("Press Enter to exit...")
         exit(1)
     
-    # Print comprehensive system status
-    print_system_status()
+    # Print comprehensive system status, removed from on_ready to avoid double printing and inaccuracies
+    #print_system_status()
     
     # TRY TO START THE BOT WITH FULL ERROR HANDLING
     print("🚀 Starting Discord bot...")
