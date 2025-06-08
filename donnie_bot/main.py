@@ -3621,23 +3621,116 @@ async def show_help(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ====== INITIALIZATION SECTION ======
+# ====== INITIALIZATIONs SECTION ======
 
-# Initialize PDF Character Parser - NEW FEATURE
+# ====== ENHANCED PDF CHARACTER PARSER INITIALIZATION ======
+print("\n🔄 Initializing PDF Character Parser...")
+
+# Check if we can import the module first
+can_import_pdf_module = False
 try:
-    from pdf_character_parser import PDFCharacterCommands
-    bot.pdf_character_commands = PDFCharacterCommands(
-        bot=bot,
-        campaign_context=campaign_context,
-        claude_client=claude_client
-    )
-    print("✅ PDF character sheet parser initialized")
+    import pdf_character_parser
+    can_import_pdf_module = True
+    print("✅ pdf_character_parser module imported successfully")
+    print(f"   PDF_AVAILABLE flag: {pdf_character_parser.PDF_AVAILABLE}")
+    
+    if hasattr(pdf_character_parser, 'IMPORT_ERRORS'):
+        if pdf_character_parser.IMPORT_ERRORS:
+            print(f"   Import errors detected: {pdf_character_parser.IMPORT_ERRORS}")
+        else:
+            print("   No import errors detected")
+            
 except ImportError as e:
-    print(f"⚠️ PDF character parser not available: {e}")
-    bot.pdf_character_commands = None
+    print(f"❌ Cannot import pdf_character_parser module: {e}")
+    print("   Make sure pdf_character_parser.py is in the same directory as main.py")
 except Exception as e:
-    print(f"⚠️ PDF character parser initialization failed: {e}")
+    print(f"❌ Error during pdf_character_parser module import: {e}")
+
+# Initialize PDF Character Parser with enhanced error handling
+if can_import_pdf_module:
+    try:
+        print("🔄 Creating PDFCharacterCommands instance...")
+        
+        # Verify we have all required dependencies
+        if not claude_client:
+            raise ValueError("claude_client is not initialized")
+        if not campaign_context:
+            raise ValueError("campaign_context is not initialized")
+        if not bot:
+            raise ValueError("bot is not initialized")
+            
+        print("✅ All dependencies verified")
+        
+        # Create the PDF character commands instance
+        from pdf_character_parser import PDFCharacterCommands
+        bot.pdf_character_commands = PDFCharacterCommands(
+            bot=bot,
+            campaign_context=campaign_context,
+            claude_client=claude_client
+        )
+        
+        print("✅ PDF character sheet parser initialized successfully!")
+        
+        # Verify commands were registered
+        if hasattr(bot.pdf_character_commands, '_register_commands'):
+            print("✅ Command registration method found")
+        else:
+            print("⚠️ Command registration method not found")
+            
+    except ImportError as e:
+        print(f"❌ PDF character parser import failed: {e}")
+        print("   Install required packages: pip install PyPDF2 pymupdf pillow")
+        bot.pdf_character_commands = None
+        
+    except Exception as e:
+        print(f"❌ PDF character parser initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        bot.pdf_character_commands = None
+else:
+    print("❌ PDF character parser initialization skipped due to import failure")
     bot.pdf_character_commands = None
+
+# Print final status
+if hasattr(bot, 'pdf_character_commands') and bot.pdf_character_commands:
+    print("🎉 PDF Character Parser: READY")
+else:
+    print("💔 PDF Character Parser: NOT AVAILABLE")
+    print("   Fallback: Use /character for manual registration")
+
+print("="*60)
+
+# ====== COMMAND AVAILABILITY CHECK (Add this to your on_ready function) ======
+# Add this inside your on_ready() function after syncing commands:
+
+async def check_command_availability():
+    """Check which commands are actually available after sync"""
+    try:
+        synced_commands = await bot.tree.fetch_commands()
+        command_names = [cmd.name for cmd in synced_commands]
+        
+        print(f"\n📋 Synced Commands ({len(command_names)}):")
+        for name in sorted(command_names):
+            print(f"   • {name}")
+        
+        # Check for PDF commands specifically
+        pdf_commands = ['upload_character_sheet', 'character_sheet_help']
+        pdf_available = all(cmd in command_names for cmd in pdf_commands)
+        
+        print(f"\n📄 PDF Commands Status:")
+        for cmd in pdf_commands:
+            status = "✅" if cmd in command_names else "❌"
+            print(f"   {status} {cmd}")
+        
+        if pdf_available:
+            print("🎉 All PDF commands are available!")
+        else:
+            print("💔 PDF commands are missing from bot")
+            print("   This indicates a registration or sync issue")
+            
+    except Exception as e:
+        print(f"❌ Could not check command availability: {e}")
+
 
 # Database health updates function
 def update_database_from_campaign_context(guild_id: str):
