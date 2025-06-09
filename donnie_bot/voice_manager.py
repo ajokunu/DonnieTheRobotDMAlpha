@@ -461,6 +461,139 @@ class VoiceManager:
             "enhanced_audio": self.enhanced_voice_manager is not None
         }
     
+    async def play_thinking_sound(self, guild_id: int, character_name: str = "adventurer"):
+        """Play a random DM thinking sound immediately to fill waiting time"""
+        
+        if not self.is_voice_active(guild_id):
+            return
+        
+        # DM thinking sounds from original main.py
+        thinking_sounds = [
+            "...Hhhhhmm...",
+            "...Aaahhh okay let's try",
+            "...Uhhhh...huh yes okay...",
+            "...Let meeee see...",
+            "...Mmm-hmm...",
+            "...Ah, okay then...",
+            "...Right well okay...",
+            "...Well...",
+            "...Okay...",
+            "...Hmm, hmm...",
+            "...Uh-huh...", 
+            "...Mmm...",
+            "...Oh...",
+            "...Alright...",
+            "...Err...",
+            "...Umm...",
+            "...Ah-huh...",
+            "...Hmmph...",
+            "...alright, alright, alright...",
+            "...Let me think...",
+        ]
+        
+        # Choose a random thinking sound
+        import random
+        thinking_sound = random.choice(thinking_sounds)
+        
+        # Add some character-specific context occasionally
+        if random.random() < 0.3:  # 30% chance
+            character_variations = [
+                f"So {character_name}...",
+                f"Hmm, {character_name}...",
+                f"Alright {character_name}, let me see...",
+                f"Well {character_name}...",
+            ]
+            thinking_sound = random.choice(character_variations)
+        
+        # Play immediately without queue (these are quick filler sounds)
+        await self._speak_thinking_sound_directly(guild_id, thinking_sound)
+    
+    async def _speak_thinking_sound_directly(self, guild_id: int, text: str):
+        """Play thinking sound directly without queue system - for immediate feedback"""
+        
+        if not self.is_voice_active(guild_id):
+            return
+        
+        voice_client = self.voice_clients.get(guild_id)
+        if not voice_client or not voice_client.is_connected():
+            return
+        
+        # Use faster speed for thinking sounds to keep them brief
+        base_speed = self.voice_speed.get(guild_id, 1.25)
+        thinking_speed = base_speed * 1.3  # 30% faster for thinking sounds
+        
+        try:
+            # Generate TTS audio quickly with faster model
+            audio_data = await self._generate_tts_audio(
+                text, 
+                speed=thinking_speed, 
+                voice="fable", 
+                model="tts-1"  # Use faster model for thinking sounds
+            )
+            
+            if not audio_data:
+                return
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+                temp_file.write(audio_data.getvalue())
+                temp_filename = temp_file.name
+            
+            try:
+                # Play immediately if not currently playing
+                if not voice_client.is_playing():
+                    audio_source = discord.FFmpegPCMAudio(temp_filename)
+                    voice_client.play(audio_source)
+                    
+                    # Wait for this short sound to finish
+                    while voice_client.is_playing():
+                        await asyncio.sleep(0.05)  # Reduced polling interval
+                
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_filename)
+                except:
+                    pass
+                    
+        except Exception as e:
+            print(f"❌ Thinking sound error: {e}")
+    
+    def optimize_text_for_tts(self, text: str) -> str:
+        """Optimize text specifically for faster, clearer TTS delivery"""
+        import re
+        
+        # Remove excessive formatting
+        clean_text = text.replace("**", "").replace("*", "").replace("_", "")
+        
+        # Spell out dice notation for better pronunciation
+        clean_text = re.sub(r'\b(\d+)d(\d+)\b', r'\1 dee \2', clean_text)
+        clean_text = re.sub(r'\bDC\s*(\d+)\b', r'difficulty class \1', clean_text)
+        clean_text = re.sub(r'\bAC\s*(\d+)\b', r'armor class \1', clean_text)
+        clean_text = re.sub(r'\bHP\s*(\d+)\b', r'hit points \1', clean_text)
+        
+        # Simplify complex words for faster speech
+        replacements = {
+            "immediately": "now",
+            "suddenly": "",
+            "extremely": "very",
+            "tremendous": "huge",
+            "magnificent": "great",
+            "extraordinary": "amazing"
+        }
+        
+        for old, new in replacements.items():
+            clean_text = clean_text.replace(old, new)
+        
+        # Remove redundant phrases
+        clean_text = re.sub(r'\b(very|quite|rather|extremely|incredibly|tremendously)\s+', '', clean_text)
+        clean_text = re.sub(r'\b(suddenly|immediately|quickly|slowly)\s+', '', clean_text)
+        
+        # Clean up extra spaces
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        
+        return clean_text
+    
     def _check_ffmpeg(self) -> bool:
         """Check if FFmpeg is available"""
         try:
@@ -469,6 +602,29 @@ class VoiceManager:
             return True
         except:
             return False
+    
+    async def add_to_voice_queue__legacy(self, guild_id: int, text: str, speaker: str, message=None):
+        """Legacy compatibility method for add_to_voice_queue calls"""
+        
+        # Update message if provided
+        if message and self.is_voice_active(guild_id):
+            try:
+                embed = message.embeds[0] if message.embeds else None
+                if embed:
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "🎤":
+                            embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {speaker}*", inline=False)
+                            break
+                    await message.edit(embed=embed)
+            except Exception as e:
+                print(f"⚠️ Message update failed: {e}")
+        
+        # Speak the text
+        await self.speak_text(guild_id, text, speaker)
+    
+    def create_tts_version(self, dm_response: str) -> str:
+        """Create TTS-optimized version of DM response (legacy compatibility)"""
+        return self.optimize_text_for_tts(dm_response)
     
     async def cleanup(self):
         """Cleanup all voice connections"""
@@ -490,3 +646,43 @@ def initialize_voice_manager(bot, openai_api_key: str) -> VoiceManager:
 def get_voice_manager() -> Optional[VoiceManager]:
     """Get the global voice manager instance"""
     return voice_manager_instance
+
+# ===== LEGACY COMPATIBILITY FUNCTIONS =====
+# These allow your existing main.py code to work without major changes
+
+async def add_to_voice_queue(guild_id: int, text: str, speaker: str, message=None):
+    """Legacy function for compatibility with existing main.py code"""
+    if voice_manager_instance:
+        await voice_manager_instance.add_to_voice_queue_legacy(guild_id, text, speaker, message)
+    else:
+        print("⚠️ Voice manager not available for add_to_voice_queue")
+
+async def play_thinking_sound(guild_id: int, character_name: str = "adventurer"):
+    """Legacy function for compatibility with existing main.py code"""
+    if voice_manager_instance:
+        await voice_manager_instance.play_thinking_sound(guild_id, character_name)
+    else:
+        print("⚠️ Voice manager not available for play_thinking_sound")
+
+def create_tts_version(dm_response: str) -> str:
+    """Legacy function for compatibility with existing main.py code"""
+    if voice_manager_instance:
+        return voice_manager_instance.create_tts_version(dm_response)
+    else:
+        # Fallback basic cleaning
+        return dm_response.replace("**", "").replace("*", "")
+
+def optimize_text_for_tts(text: str) -> str:
+    """Legacy function for compatibility with existing main.py code"""
+    if voice_manager_instance:
+        return voice_manager_instance.optimize_text_for_tts(text)
+    else:
+        # Fallback basic cleaning
+        return text.replace("**", "").replace("*", "")
+
+def is_voice_active(guild_id: int) -> bool:
+    """Legacy function to check if voice is active"""
+    if voice_manager_instance:
+        return voice_manager_instance.is_voice_active(guild_id)
+    else:
+        return False

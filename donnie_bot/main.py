@@ -12,11 +12,11 @@ import tempfile
 import io
 import time
 from datetime import datetime
+from voice_manager import initialize_voice_manager, get_voice_manager
 
 # Combat system imports (simplified)
 import json
 from typing import Dict, List, Tuple, Optional
-
 load_dotenv()
 
 # ⚡ PERFORMANCE CONFIGURATION
@@ -353,10 +353,7 @@ bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 # Voice quality was moved to top of file with other voice globals
 
 # Voice client storage
-voice_clients = {}
-tts_enabled = {}  # Track TTS status per guild
-voice_speed = {}  # Track speech speed per guild (default 1.25)
-voice_queue = {}  # Voice queue per guild to prevent overlapping
+voice_manager = None
 
 # DM Thinking Sounds - ACTUAL sounds, not descriptions
 DM_THINKING_SOUNDS = [
@@ -493,9 +490,7 @@ async def process_continue_action(interaction: discord.Interaction, user_id: str
     
     guild_id = interaction.guild.id
     channel_id = interaction.channel.id
-    voice_will_speak = (guild_id in voice_clients and 
-                       voice_clients[guild_id].is_connected() and 
-                       tts_enabled.get(guild_id, False))
+    voice_will_speak = voice_manager and voice_manager.is_voice_active(guild_id)
     
     # Create processing message
     embed = discord.Embed(color=0x2E8B57)
@@ -691,8 +686,9 @@ async def process_unified_dm_response_background(user_id: str, player_input: str
             ))
         
         # Voice processing (unchanged)
-        if voice_will_speak:
-            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+        # Voice processing with enhanced audio
+        if voice_will_speak and voice_manager:
+            await voice_manager.speak_text(guild_id, tts_text, character_name)
             
     except Exception as e:
         print(f"❌ Unified background processing error: {e}")
@@ -790,8 +786,9 @@ async def process_unified_dm_response_background_with_combat(user_id: str, playe
             ))
         
         # Voice processing (unchanged)
-        if voice_will_speak:
-            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+        # Voice processing with enhanced audio
+        if voice_will_speak and voice_manager:
+            await voice_manager.speak_text(guild_id, tts_text, character_name)
             
     except Exception as e:
         print(f"❌ Enhanced combat processing error: {e}")
@@ -879,8 +876,9 @@ async def process_unified_dm_response_background_enhanced(user_id: str, player_i
             ))
         
         # Voice processing (unchanged)
-        if voice_will_speak:
-            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+        # Voice processing with enhanced audio
+        if voice_will_speak and voice_manager:
+            await voice_manager.speak_text(guild_id, tts_text, character_name)
             
     except Exception as e:
         print(f"❌ Enhanced background processing error: {e}")
@@ -892,51 +890,6 @@ async def process_unified_dm_response_background_enhanced(user_id: str, player_i
             player_name, guild_id, channel_id, voice_will_speak
         )
 
-
-async def generate_tts_audio(text: str, voice: str = "fable", speed: float = 1.20, model: str = "tts-1") -> Optional[io.BytesIO]:
-    """Generate TTS audio using OpenAI's API - optimized for speed"""
-    try:
-        # Clean text for TTS (remove excessive formatting)
-        clean_text = text.replace("**", "").replace("*", "").replace("_", "")
-        
-        # Enhanced TTS optimization
-        clean_text = optimize_text_for_tts(clean_text)
-        
-        # Use OpenAI TTS API with optimized settings for speed
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=8),  # Reduced timeout
-            connector=aiohttp.TCPConnector(limit=10)
-        ) as session:
-            headers = {
-                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-                "Content-Type": "application/json"
-            }
-            
-            # OpenAI TTS payload optimized for speed
-            payload = {
-                "model": model,  # Default to tts-1 for speed
-                "input": clean_text,
-                "voice": voice,  # "fable" voice - expressive and dramatic for storytelling
-                "response_format": "mp3",  # Changed from opus to mp3 for faster processing
-                "speed": speed  # Adjustable speed for optimal gameplay
-            }
-            
-            async with session.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers=headers,
-                json=payload
-            ) as response:
-                if response.status == 200:
-                    audio_data = await response.read()
-                    return io.BytesIO(audio_data)
-                else:
-                    error_text = await response.text()
-                    print(f"OpenAI TTS API error: {response.status} - {error_text}")
-                    return None
-                    
-    except Exception as e:
-        print(f"TTS generation error: {e}")
-        return None
 
 def optimize_text_for_tts(text: str) -> str:
     """Optimize text specifically for faster, clearer TTS delivery"""
@@ -972,204 +925,6 @@ def optimize_text_for_tts(text: str) -> str:
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     
     return clean_text
-
-async def play_thinking_sound(guild_id: int, character_name: str):
-    """Play a random DM thinking sound immediately to fill waiting time"""
-    # ✅ FIXED: Ensure guild_id is valid int
-    if not isinstance(guild_id, int) or guild_id <= 0:
-        print(f"⚠️ Invalid guild_id for thinking sound: {guild_id}")
-        return
-        
-    if (guild_id not in voice_clients or 
-        not voice_clients[guild_id].is_connected() or 
-        not tts_enabled.get(guild_id, False)):
-        return
-    
-    # Choose a random thinking sound
-    thinking_sound = random.choice(DM_THINKING_SOUNDS)
-    
-    # Add some character-specific context occasionally
-    if random.random() < 0.3:  # 30% chance
-        character_variations = [
-            f"So {character_name}...",
-            f"Hmm, {character_name}...",
-            f"Alright {character_name}, let me see...",
-            f"Well {character_name}...",
-        ]
-        thinking_sound = random.choice(character_variations)
-    
-    # Play immediately without queue (these are quick filler sounds)
-    await speak_thinking_sound_directly(guild_id, thinking_sound)
-
-async def speak_thinking_sound_directly(guild_id: int, text: str):
-    """Play thinking sound directly without queue system - for immediate feedback"""
-    if guild_id not in voice_clients or not tts_enabled.get(guild_id, False):
-        return
-    
-    voice_client = voice_clients[guild_id]
-    if not voice_client or not voice_client.is_connected():
-        return
-    
-    # Use faster speed and model for thinking sounds to keep them brief
-    speed = voice_speed.get(guild_id, 1.25) * 1.3  # 30% faster for thinking sounds
-    
-    try:
-        # Generate TTS audio quickly with faster model
-        audio_data = await generate_tts_audio(text, voice="fable", speed=speed, model="tts-1")
-        if not audio_data:
-            return
-        
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-            temp_file.write(audio_data.getvalue())
-            temp_filename = temp_file.name
-        
-        # Play immediately if not currently playing
-        if not voice_client.is_playing():
-            audio_source = discord.FFmpegPCMAudio(temp_filename)
-            voice_client.play(audio_source)
-            
-            # Wait for this short sound to finish
-            while voice_client.is_playing():
-                await asyncio.sleep(0.05)  # Reduced polling interval
-        
-        # Clean up temp file
-        try:
-            os.unlink(temp_filename)
-        except:
-            pass
-            
-    except Exception as e:
-        print(f"Thinking sound error: {e}")
-
-async def process_voice_queue(guild_id: int):
-    """Process voice queue to prevent overlapping speech"""
-    if guild_id not in voice_queue:
-        voice_queue[guild_id] = []
-    
-    while voice_queue[guild_id]:
-        # Get next item in queue
-        queue_item = voice_queue[guild_id].pop(0)
-        text = queue_item['text']
-        message = queue_item.get('message')
-        player_name = queue_item.get('player_name', 'Unknown')
-        
-        # Check if voice is still enabled and connected
-        if (guild_id not in voice_clients or 
-            not voice_clients[guild_id].is_connected() or 
-            not tts_enabled.get(guild_id, False)):
-            continue
-        
-        # Update message to show this player is speaking
-        if message:
-            try:
-                embed = message.embeds[0]
-                for i, field in enumerate(embed.fields):
-                    if field.name == "🎤":
-                        embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {player_name}*", inline=False)
-                        break
-                await message.edit(embed=embed)
-            except:
-                pass
-        
-        # Generate and play TTS
-        await speak_text_directly(guild_id, text)
-        
-        # Small pause between voice lines
-        await asyncio.sleep(0.5)
-
-async def speak_text_directly(guild_id: int, text: str):
-    """Generate TTS and play directly without queue management"""
-    if guild_id not in voice_clients or not tts_enabled.get(guild_id, False):
-        return
-    
-    voice_client = voice_clients[guild_id]
-    if not voice_client or not voice_client.is_connected():
-        return
-    
-    # Get guild-specific speed or use default
-    speed = voice_speed.get(guild_id, 1.25)
-    
-    # Optimize text for TTS
-    tts_text = optimize_text_for_tts(text)
-    
-    # Choose model based on quality settings
-    quality_mode = voice_quality.get(guild_id, "smart")  # Default to smart mode
-    
-    if quality_mode == "speed":
-        model = "tts-1"
-    elif quality_mode == "quality":
-        model = "tts-1-hd"
-    else:  # smart mode
-        # Use tts-1-hd for dramatic moments, tts-1 for regular responses
-        dramatic_keywords = ["critical", "natural 20", "initiative", "damage", "combat begins", "you take", "saving throw"]
-        if len(tts_text) < 120 and any(word in tts_text.lower() for word in dramatic_keywords):
-            model = "tts-1-hd"  # Use high quality for important moments
-        else:
-            model = "tts-1"  # Use speed for regular responses
-    
-    print(f"🎤 TTS: Using {model} for {len(tts_text)} chars in {quality_mode} mode")
-    
-    # Generate TTS audio with optimized text
-    audio_data = await generate_tts_audio(tts_text, voice="fable", speed=speed, model=model)
-    if not audio_data:
-        return
-    
-    # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-        temp_file.write(audio_data.getvalue())
-        temp_filename = temp_file.name
-    
-    try:
-        # Wait for any current audio to finish
-        while voice_client.is_playing():
-            await asyncio.sleep(0.05)  # Reduced polling interval
-        
-        # Play audio in voice channel
-        audio_source = discord.FFmpegPCMAudio(temp_filename)
-        voice_client.play(audio_source)
-        
-        # Wait for audio to finish
-        while voice_client.is_playing():
-            await asyncio.sleep(0.1)
-            
-    except Exception as e:
-        print(f"Audio playback error: {e}")
-    finally:
-        # Clean up temp file
-        try:
-            os.unlink(temp_filename)
-        except:
-            pass
-
-async def add_to_voice_queue(guild_id: int, text: str, player_name: str, message=None):
-    """Add voice request to queue and process it"""
-    if guild_id not in voice_queue:
-        voice_queue[guild_id] = []
-    
-    # Add to queue
-    voice_queue[guild_id].append({
-        'text': text,
-        'message': message,
-        'player_name': player_name
-    })
-    
-    # Show queue status if multiple items
-    queue_size = len(voice_queue[guild_id])
-    if message and queue_size > 1:
-        try:
-            embed = message.embeds[0]
-            for i, field in enumerate(embed.fields):
-                if field.name == "🎤":
-                    embed.set_field_at(i, name="🎤", value=f"*Queued ({queue_size} in line) - {player_name}*", inline=False)
-                    break
-            await message.edit(embed=embed)
-        except:
-            pass
-    
-    # Start processing queue if not already running
-    if queue_size == 1:  # Only start if this is the first item
-        asyncio.create_task(process_voice_queue(guild_id))
 
 @bot.event
 async def on_ready():
@@ -1280,8 +1035,8 @@ async def on_ready():
             episode_commands = EpisodeCommands(
                 bot=bot,
                 campaign_context=campaign_context,
-                voice_clients=voice_clients,
-                tts_enabled=tts_enabled,
+                voice_clients=voice_manager.voice_clients if voice_manager else {},
+                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
                 add_to_voice_queue_func=add_to_voice_queue,
                 episode_operations=EpisodeOperations,
                 character_operations=CharacterOperations,
@@ -1290,6 +1045,7 @@ async def on_ready():
                 sync_function=sync_campaign_context_with_database,
                 unified_response_system=unified_response_system_instance
             )
+
             print("✅ Episode management system initialized with database support")
         except Exception as e:
             print(f"⚠️ Episode management initialization failed: {e}")
@@ -1307,12 +1063,13 @@ async def on_ready():
             character_progression = CharacterProgressionCommands(
                 bot=bot,
                 campaign_context=campaign_context,
-                voice_clients=voice_clients,
-                tts_enabled=tts_enabled,
+                voice_clients=voice_manager.voice_clients if voice_manager else {},
+                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
                 add_to_voice_queue_func=add_to_voice_queue,
                 character_operations=CharacterOperations,
                 episode_operations=EpisodeOperations
             )
+
             print("✅ Character progression system initialized with database support")
         except Exception as e:
             print(f"⚠️ Character progression initialization failed: {e}")
@@ -2402,9 +2159,7 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     )
     
     # Voice status - use int guild_id for voice operations
-    voice_will_speak = (guild_id_int in voice_clients and 
-                       voice_clients[guild_id_int].is_connected() and 
-                       tts_enabled.get(guild_id_int, False))
+    voice_will_speak = voice_manager and voice_manager.is_voice_active(guild_id)
 
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
@@ -2731,13 +2486,12 @@ async def add_initiative(interaction: discord.Interaction, roll: int):
             
             # Voice announcement if enabled
             guild_id = interaction.guild.id
-            voice_will_speak = (guild_id in voice_clients and 
-                               voice_clients[guild_id].is_connected() and 
-                               tts_enabled.get(guild_id, False))
+            voice_will_speak = voice_manager and voice_manager.is_voice_active(guild_id)
             
             if voice_will_speak:
                 announcement = f"{char_name} enters combat with initiative {roll}!"
-                await add_to_voice_queue(guild_id, announcement, "Initiative")
+                if voice_manager:
+                    await voice_manager.speak_text(guild_id, tts_text, character_name)
         
         else:
             # Error adding to combat
