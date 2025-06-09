@@ -12,7 +12,6 @@ import tempfile
 import io
 import time
 from datetime import datetime
-from voice_manager import initialize_voice_manager, get_voice_manager
 
 # Combat system imports (simplified)
 import json
@@ -20,11 +19,45 @@ from typing import Dict, List, Tuple, Optional
 load_dotenv()
 
 # ⚡ PERFORMANCE CONFIGURATION
-MAX_MEMORIES_FAST = 2  # Limited memory retrieval for speed
+MAX_MEMORIES_FAST = 2  # Limited memory retrieval for speed@bot.event
 MAX_MEMORIES_FULL = 10  # Full memory retrieval when needed
 BACKGROUND_PROCESSING = True  # Process memories after response sent
 MAX_RESPONSE_LENGTH = 650  # Shorter responses for faster TTS
 RESPONSE_TIMEOUT = 8.0  # Maximum time to wait for Claude response
+
+
+try:
+    from voice_manager import initialize_voice_manager, get_voice_manager
+    VOICE_MANAGER_AVAILABLE = True
+    print("✅ Voice manager module imported successfully")
+except ImportError as e:
+    print(f"⚠️ Voice manager not available: {e}")
+    VOICE_MANAGER_AVAILABLE = False
+
+voice_manager = None  # Will be initialized later
+
+async def add_to_voice_queue(guild_id: int, text: str, speaker: str, message=None):
+    """Minimal wrapper for voice_manager - required for episode/progression systems"""
+    global voice_manager
+    
+    if voice_manager and voice_manager.is_voice_active(guild_id):
+        await voice_manager.speak_text(guild_id, text, speaker)
+        
+        # Update message if provided (for backwards compatibility)
+        if message:
+            try:
+                embed = message.embeds[0] if message.embeds else None
+                if embed:
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "🎤":
+                            embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {speaker}*", inline=False)
+                            break
+                    await message.edit(embed=embed)
+            except Exception as e:
+                print(f"⚠️ Message update failed: {e}")
+    else:
+        print(f"⚠️ Voice not active for guild {guild_id}")
+
 
 # ====== FFMPEG AVAILABILITY CHECK ======
 FFMPEG_AVAILABLE = False
@@ -354,6 +387,242 @@ bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
 # Voice client storage
 voice_manager = None
+
+
+@bot.event
+async def on_ready():
+    """FIXED: Proper initialization with voice_manager and scope fixes"""
+    # ✅ FIXED: Declare all global variables at the start
+    global episode_commands, character_progression, unified_response_system_instance
+    global memory_database_adapter, voice_manager
+    global DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE, CHARACTER_PROGRESSION_AVAILABLE
+    global UNIFIED_RESPONSE_AVAILABLE, PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
+
+    print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
+    print(f'🏔️ Giants threaten the Sword Coast!')
+    
+    # ====== VOICE SYSTEM INITIALIZATION (FIRST!) ======
+    print("🎤 Initializing voice system...")
+    try:
+        # Get OpenAI API key for voice features
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if openai_api_key and FFMPEG_AVAILABLE:
+            voice_manager = initialize_voice_manager(bot, openai_api_key)
+            print("✅ Voice manager initialized successfully")
+            print("🎤 Donnie the DM is ready to speak!")
+            print("🎤 Features: Enhanced audio system, voice queue, TTS optimization")
+        else:
+            print("⚠️ Voice manager not initialized - missing OPENAI_API_KEY or FFmpeg")
+            if not openai_api_key:
+                print("   Add OPENAI_API_KEY to your .env file")
+            if not FFMPEG_AVAILABLE:
+                print("   Install FFmpeg for voice features")
+    except Exception as e:
+        print(f"⚠️ Voice manager initialization failed: {e}")
+        voice_manager = None
+    
+    print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
+    
+    # ====== DATABASE INITIALIZATION ======
+    if DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing database with enhanced memory schema...")
+            
+            # Step 1: Initialize core database
+            init_database()
+            print("✅ Core database initialized")
+            
+            # Step 2: Upgrade to enhanced memory schema
+            try:
+                from database.enhanced_schema import upgrade_database_schema
+                upgrade_database_schema()
+                print("✅ Enhanced memory schema upgraded successfully")
+            except Exception as e:
+                print(f"⚠️ Enhanced schema upgrade failed: {e}")
+            
+            # Step 3: Create REAL memory adapter
+            memory_database_adapter = MemoryDatabaseAdapter(
+                EpisodeOperations, CharacterOperations, GuildOperations
+            )
+            print("✅ Real memory adapter initialized")
+            
+            # Step 4: Test database health
+            if health_check():
+                stats = get_database_stats()
+                print(f"📊 Database stats: {stats}")
+                
+                # Test memory tables
+                try:
+                    from database.database import get_db_connection
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    
+                    memory_tables = ['conversation_memories', 'npc_memories', 'memory_consolidation']
+                    for table in memory_tables:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                        if cursor.fetchone():
+                            print(f"✅ Memory table '{table}' exists")
+                        else:
+                            print(f"❌ Memory table '{table}' missing")
+                    
+                    conn.close()
+                    
+                except Exception as e:
+                    print(f"⚠️ Memory table check failed: {e}")
+            else:
+                print("⚠️ Database health check failed")
+                
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            DATABASE_AVAILABLE = False
+            memory_database_adapter = None
+    else:
+        print("⚠️ Database features disabled")
+        memory_database_adapter = None
+    
+    # ====== UNIFIED RESPONSE SYSTEM INITIALIZATION ======
+    if UNIFIED_RESPONSE_AVAILABLE:
+        try:
+            print("🔄 Initializing unified response system with REAL memory...")
+            
+            memory_available = (DATABASE_AVAILABLE and 
+                              memory_database_adapter and 
+                              hasattr(memory_database_adapter, 'memory_ops') and 
+                              memory_database_adapter.memory_ops is not None)
+            
+            unified_response_system_instance = initialize_unified_response_system(
+                claude_client=claude_client,
+                campaign_context=campaign_context,
+                persistent_memory_available=memory_available,
+                database_operations=memory_database_adapter,
+                max_response_length=MAX_RESPONSE_LENGTH,
+                response_timeout=RESPONSE_TIMEOUT
+            )
+            
+            print(f"🎯 Unified DM Response System initialized with memory: {'✅' if memory_available else '❌'}")
+            
+        except Exception as e:
+            print(f"❌ Failed to initialize unified response system: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("⚠️ Unified response system not available - using basic fallbacks")
+    
+    # ====== EPISODE MANAGEMENT INITIALIZATION ======
+    if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing episode management...")
+            episode_commands = EpisodeCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_manager.voice_clients if voice_manager else {},
+                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
+                add_to_voice_queue_func=add_to_voice_queue,  # ✅ Now available!
+                episode_operations=EpisodeOperations,
+                character_operations=CharacterOperations,
+                guild_operations=GuildOperations,
+                claude_client=claude_client,
+                sync_function=sync_campaign_context_with_database,
+                unified_response_system=unified_response_system_instance
+            )
+            print("✅ Episode management system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Episode management initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            episode_commands = None
+    else:
+        print("⚠️ Episode management disabled (missing dependencies)")
+        episode_commands = None
+    
+    # ====== CHARACTER PROGRESSION INITIALIZATION ======
+    if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing character progression...")
+            character_progression = CharacterProgressionCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_manager.voice_clients if voice_manager else {},
+                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
+                add_to_voice_queue_func=add_to_voice_queue,  # ✅ Now available!
+                character_operations=CharacterOperations,
+                episode_operations=EpisodeOperations
+            )
+            print("✅ Character progression system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Character progression initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            character_progression = None
+    else:
+        print("⚠️ Character progression disabled (missing dependencies)")
+        character_progression = None
+    
+    # ====== COMBAT SYSTEM INITIALIZATION ======
+    if COMBAT_AVAILABLE:
+        try:
+            print("🔄 Initializing combat system...")
+            if 'initialize_combat_system' in globals() and callable(initialize_combat_system):
+                await initialize_combat_system(bot, campaign_context)
+                print("✅ Combat system initialized successfully")
+            else:
+                print("⚠️ Combat system initialize function not found")
+        except Exception as e:
+            print(f"⚠️ Combat system initialization failed: {e}")
+    
+    # ====== COMMAND SYNCHRONIZATION ======
+    print('🔄 Syncing slash commands...')
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} slash commands')
+        
+        # ====== FINAL STATUS REPORT ======
+        features = {
+            "Database": "✅" if DATABASE_AVAILABLE else "❌",
+            "Unified Response System": "✅" if UNIFIED_RESPONSE_AVAILABLE else "❌", 
+            "Episodes": "✅" if episode_commands else "❌",
+            "Progression": "✅" if character_progression else "❌",
+            "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
+            "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
+            "Continue Buttons": "✅",
+            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌",
+            "Voice Manager": "✅" if voice_manager else "❌"
+        }
+        
+        print("🎲 Storm King's Thunder Bot Feature Status:")
+        for feature, status in features.items():
+            print(f"   {status} {feature}")
+            
+        print("🎉 Ready for UNIFIED epic adventures!")
+        
+        # ====== SYSTEM VERIFICATION ======
+        if UNIFIED_RESPONSE_AVAILABLE and unified_response_system_instance:
+            try:
+                status = get_response_system_status()
+                if "Not Initialized" not in str(status):
+                    print("✅ Unified response system verified working!")
+                else:
+                    print("⚠️ Unified response system initialization issue detected")
+            except Exception as e:
+                print(f"⚠️ Could not verify unified response system: {e}")
+        
+        # Verify systems
+        if episode_commands:
+            print("✅ Episode management verified working!")
+        else:
+            print("⚠️ Episode management not properly initialized")
+            
+        if voice_manager:
+            print("✅ Voice manager verified working!")
+        else:
+            print("⚠️ Voice manager not properly initialized")
+        
+    except Exception as e:
+        print(f'❌ Failed to sync commands: {e}')
+        import traceback
+        traceback.print_exc()
+
 
 # DM Thinking Sounds - ACTUAL sounds, not descriptions
 DM_THINKING_SOUNDS = [
@@ -926,223 +1195,18 @@ def optimize_text_for_tts(text: str) -> str:
     
     return clean_text
 
-@bot.event
-async def on_ready():
-    """FIXED: Proper initialization order with global variable handling"""
-    # ✅ CRITICAL: Declare ALL global variables at the start
-    global episode_commands, character_progression, unified_response_system_instance
-    global memory_database_adapter, DATABASE_AVAILABLE, EPISODE_MANAGER_AVAILABLE
-    global CHARACTER_PROGRESSION_AVAILABLE, UNIFIED_RESPONSE_AVAILABLE
-    global PERSISTENT_MEMORY_AVAILABLE, COMBAT_AVAILABLE
+@bot.tree.command(name="join_voice", description="Donnie joins your voice channel to narrate the adventure")
+async def join_voice_channel(interaction: discord.Interaction):
+    """Join voice channel using voice manager"""
+    global voice_manager
+    
+    if not voice_manager:
+        await interaction.response.send_message("❌ Voice system not initialized! Check that you have OPENAI_API_KEY in your .env file.", ephemeral=True)
+        return
+    
+    # Use voice manager's join method
+    success = await voice_manager.join_voice_channel(interaction)
 
-    print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
-    print(f'🏔️ Giants threaten the Sword Coast!')
-    print(f'🎤 Donnie the DM is ready to speak!')
-    print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
-    
-    # ====== DATABASE INITIALIZATION WITH ENHANCED SCHEMA ======
-    if DATABASE_AVAILABLE:
-        try:
-            print("🔄 Initializing database with enhanced memory schema...")
-            
-            # Step 1: Initialize core database
-            init_database()
-            print("✅ Core database initialized")
-            
-            # Step 2: Upgrade to enhanced memory schema
-            try:
-                from database.enhanced_schema import upgrade_database_schema
-                upgrade_database_schema()
-                print("✅ Enhanced memory schema upgraded successfully")
-            except Exception as e:
-                print(f"⚠️ Enhanced schema upgrade failed: {e}")
-                # Continue with core database only
-            
-            # Step 3: Create REAL memory adapter
-            memory_database_adapter = MemoryDatabaseAdapter(
-                EpisodeOperations, CharacterOperations, GuildOperations
-            )
-            print("✅ Real memory adapter initialized")
-            
-            # Step 4: Test database health
-            if health_check():
-                stats = get_database_stats()
-                print(f"📊 Database stats: {stats}")
-                
-                # Test memory tables
-                try:
-                    from database.database import get_db_connection
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    
-                    # Check if enhanced memory tables exist
-                    memory_tables = ['conversation_memories', 'npc_memories', 'memory_consolidation']
-                    for table in memory_tables:
-                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
-                        if cursor.fetchone():
-                            print(f"✅ Memory table '{table}' exists")
-                        else:
-                            print(f"❌ Memory table '{table}' missing")
-                    
-                    conn.close()
-                    
-                except Exception as e:
-                    print(f"⚠️ Memory table check failed: {e}")
-            else:
-                print("⚠️ Database health check failed")
-                
-        except Exception as e:
-            print(f"❌ Database initialization failed: {e}")
-            DATABASE_AVAILABLE = False
-            memory_database_adapter = None
-    else:
-        print("⚠️ Database features disabled")
-        memory_database_adapter = None
-    
-    # ====== FIXED UNIFIED RESPONSE SYSTEM INITIALIZATION ======
-    if UNIFIED_RESPONSE_AVAILABLE:
-        try:
-            print("🔄 Initializing unified response system with REAL memory...")
-            
-            # Check if we have real memory operations
-            memory_available = (DATABASE_AVAILABLE and 
-                              memory_database_adapter and 
-                              hasattr(memory_database_adapter, 'memory_ops') and 
-                              memory_database_adapter.memory_ops is not None)
-            
-            unified_response_system_instance = initialize_unified_response_system(
-                claude_client=claude_client,
-                campaign_context=campaign_context,
-                persistent_memory_available=memory_available,
-                database_operations=memory_database_adapter,
-                max_response_length=MAX_RESPONSE_LENGTH,
-                response_timeout=RESPONSE_TIMEOUT
-            )
-            
-            print(f"🎯 Unified DM Response System initialized with memory: {'✅' if memory_available else '❌'}")
-            
-        except Exception as e:
-            print(f"❌ Failed to initialize unified response system: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print("⚠️ Unified response system not available - using basic fallbacks")
-    
-    # ====== FIXED EPISODE MANAGEMENT INITIALIZATION ======
-    if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
-        try:
-            print("🔄 Initializing episode management...")
-            episode_commands = EpisodeCommands(
-                bot=bot,
-                campaign_context=campaign_context,
-                voice_clients=voice_manager.voice_clients if voice_manager else {},
-                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
-                add_to_voice_queue_func=add_to_voice_queue,
-                episode_operations=EpisodeOperations,
-                character_operations=CharacterOperations,
-                guild_operations=GuildOperations,
-                claude_client=claude_client,
-                sync_function=sync_campaign_context_with_database,
-                unified_response_system=unified_response_system_instance
-            )
-
-            print("✅ Episode management system initialized with database support")
-        except Exception as e:
-            print(f"⚠️ Episode management initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-            episode_commands = None
-    else:
-        print("⚠️ Episode management disabled (missing dependencies)")
-        episode_commands = None
-    
-    # ====== FIXED CHARACTER PROGRESSION INITIALIZATION ======
-    if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
-        try:
-            print("🔄 Initializing character progression...")
-            character_progression = CharacterProgressionCommands(
-                bot=bot,
-                campaign_context=campaign_context,
-                voice_clients=voice_manager.voice_clients if voice_manager else {},
-                tts_enabled=voice_manager.tts_enabled if voice_manager else {},
-                add_to_voice_queue_func=add_to_voice_queue,
-                character_operations=CharacterOperations,
-                episode_operations=EpisodeOperations
-            )
-
-            print("✅ Character progression system initialized with database support")
-        except Exception as e:
-            print(f"⚠️ Character progression initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-            character_progression = None
-    else:
-        print("⚠️ Character progression disabled (missing dependencies)")
-        character_progression = None
-    
-    # ====== FIXED COMBAT SYSTEM INITIALIZATION ======
-    if COMBAT_AVAILABLE:
-        try:
-            print("🔄 Initializing combat system...")
-            if 'initialize_combat_system' in globals() and callable(initialize_combat_system):
-                await initialize_combat_system(bot, campaign_context)
-                print("✅ Combat system initialized successfully")
-            else:
-                print("⚠️ Combat system initialize function not found")
-        except Exception as e:
-            print(f"⚠️ Combat system initialization failed: {e}")
-    
-    # ====== COMMAND SYNCHRONIZATION ======
-    print('🔄 Syncing slash commands...')
-    
-    # Check for FFmpeg
-    if not FFMPEG_AVAILABLE:
-        print("⚠️ FFmpeg not found - voice features disabled")
-        
-    try:
-        synced = await bot.tree.sync()
-        print(f'✅ Synced {len(synced)} slash commands')
-        
-        # ====== FINAL STATUS REPORT ======
-        features = {
-            "Database": "✅" if DATABASE_AVAILABLE else "❌",
-            "Unified Response System": "✅" if UNIFIED_RESPONSE_AVAILABLE else "❌",
-            "Episodes": "✅" if episode_commands else "❌",
-            "Progression": "✅" if character_progression else "❌",
-            "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
-            "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
-            "Continue Buttons": "✅",
-            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌",
-            "FFmpeg (Voice)": "✅" if FFMPEG_AVAILABLE else "❌"
-        }
-        
-        print("🎲 Storm King's Thunder Bot Feature Status:")
-        for feature, status in features.items():
-            print(f"   {status} {feature}")
-            
-        print("🎉 Ready for UNIFIED epic adventures!")
-        
-        # ====== SYSTEM VERIFICATION ======
-        if UNIFIED_RESPONSE_AVAILABLE and unified_response_system_instance:
-            try:
-                status = get_response_system_status()
-                if "Not Initialized" not in str(status):
-                    print("✅ Unified response system verified working!")
-                else:
-                    print("⚠️ Unified response system initialization issue detected")
-            except Exception as e:
-                print(f"⚠️ Could not verify unified response system: {e}")
-        
-        # Verify episode management
-        if episode_commands:
-            print("✅ Episode management verified working!")
-        else:
-            print("⚠️ Episode management not properly initialized")
-        
-    except Exception as e:
-        print(f'❌ Failed to sync commands: {e}')
-        import traceback
-        traceback.print_exc()
 
 @bot.tree.command(name="debug_memory_detailed", description="Detailed memory system diagnostics (Admin only)")
 async def debug_memory_detailed(interaction: discord.Interaction):
@@ -1328,153 +1392,422 @@ async def on_message(message):
 
 # ====== VOICE CHANNEL COMMANDS ======
 
-@bot.tree.command(name="join_voice", description="Donnie joins your voice channel to narrate the adventure")
-async def join_voice_channel(interaction: discord.Interaction):
-    """Join the user's voice channel with comprehensive error handling"""
-    
-    # Check FFmpeg first
+# Add these VOICE FUNCTIONS at the top of main.py, right after imports and before @bot.event:
+
+# ====== VOICE SYSTEM FUNCTIONS (DEFINE EARLY) ======
+import asyncio
+import os
+from io import BytesIO
+
+# Voice system globals (ensure these are defined early)
+voice_clients = {}
+tts_enabled = {}
+voice_speed = {}
+voice_queue = {}
+
+async def add_to_voice_queue(guild_id: int, text: str, speaker: str, message=None):
+    """Add text to voice queue - CRITICAL: This function must be available early"""
     if not FFMPEG_AVAILABLE:
-        await interaction.response.send_message("❌ FFmpeg is not installed! Voice features require FFmpeg to be installed on the system.", ephemeral=True)
-        return
-    
-    # Check if in guild and user is member
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
-        return
-    
-    # Check if user is in voice channel
-    if not is_user_in_voice(interaction):
-        await interaction.response.send_message("❌ You need to be in a voice channel first!", ephemeral=True)
-        return
-    
-    # Check if campaign is started
-    if not campaign_context.get("session_started", False) and not campaign_context.get("episode_active", False):
-        await interaction.response.send_message("❌ Start the campaign first with `/start` or `/start_episode`!", ephemeral=True)
-        return
-    
-    voice_channel = get_voice_channel(interaction)
-    if not voice_channel:
-        await interaction.response.send_message("❌ Could not access your voice channel!", ephemeral=True)
-        return
-    
-    # Check bot permissions
-    bot_member = interaction.guild.get_member(bot.user.id)
-    if not bot_member:
-        await interaction.response.send_message("❌ Bot member not found in guild!", ephemeral=True)
+        print(f"⚠️ FFmpeg not available - skipping voice for guild {guild_id}")
         return
         
-    channel_perms = voice_channel.permissions_for(bot_member)
-    if not channel_perms.connect:
-        await interaction.response.send_message("❌ I don't have permission to join that voice channel!", ephemeral=True)
-        return
-    
-    if not channel_perms.speak:
-        await interaction.response.send_message("❌ I don't have permission to speak in that voice channel!", ephemeral=True)
+    if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
+        print(f"⚠️ Voice not connected for guild {guild_id} - text: {text[:50]}...")
         return
         
-    guild_id = interaction.guild.id
+    if not tts_enabled.get(guild_id, False):
+        print(f"⚠️ TTS disabled for guild {guild_id}")
+        return
     
     try:
-        # Clean up existing connection
-        if guild_id in voice_clients:
-            try:
-                if voice_clients[guild_id].is_connected():
-                    await voice_clients[guild_id].disconnect()
-            except Exception as cleanup_error:
-                print(f"Warning: Error during voice cleanup: {cleanup_error}")
-            finally:
-                del voice_clients[guild_id]
+        # Add to queue if it exists
+        if guild_id not in voice_queue:
+            voice_queue[guild_id] = []
         
-        # Attempt to join with timeout
+        voice_queue[guild_id].append({
+            'text': text,
+            'speaker': speaker,
+            'message': message
+        })
+        
+        # Process queue if not already processing
+        if not hasattr(voice_clients[guild_id], '_processing_queue'):
+            voice_clients[guild_id]._processing_queue = True
+            await process_voice_queue(guild_id)
+            
+    except Exception as e:
+        print(f"❌ Voice queue error for guild {guild_id}: {e}")
+
+async def process_voice_queue(guild_id: int):
+    """Process voice queue for a guild"""
+    if guild_id not in voice_clients or not voice_clients[guild_id].is_connected():
+        return
+        
+    voice_client = voice_clients[guild_id]
+    
+    try:
+        while voice_queue.get(guild_id) and voice_client.is_connected():
+            if voice_client.is_playing():
+                await asyncio.sleep(0.5)
+                continue
+                
+            item = voice_queue[guild_id].pop(0)
+            await speak_text(guild_id, item['text'], item['speaker'], item['message'])
+            
+    except Exception as e:
+        print(f"❌ Error processing voice queue for guild {guild_id}: {e}")
+    finally:
+        if hasattr(voice_client, '_processing_queue'):
+            voice_client._processing_queue = False
+
+async def speak_text(guild_id: int, text: str, speaker: str, message=None):
+    """Speak text using TTS"""
+    if not FFMPEG_AVAILABLE or guild_id not in voice_clients:
+        return
+        
+    voice_client = voice_clients[guild_id]
+    if not voice_client.is_connected() or not tts_enabled.get(guild_id, False):
+        return
+    
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            print("⚠️ OPENAI_API_KEY not found - cannot generate TTS")
+            return
+        
+        # Clean text for TTS
+        clean_text = create_tts_version(text)
+        if len(clean_text.strip()) == 0:
+            return
+            
+        # Generate TTS using OpenAI
+        import aiohttp
+        
+        tts_data = {
+            "model": "tts-1",
+            "input": clean_text[:4000],  # OpenAI limit
+            "voice": "fable",  # Donnie's character voice
+            "speed": voice_speed.get(guild_id, 1.25)
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {openai_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/audio/speech",
+                json=tts_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    audio_data = await response.read()
+                    
+                    # Play audio
+                    audio_source = discord.FFmpegPCMAudio(
+                        BytesIO(audio_data),
+                        pipe=True,
+                        options='-f mp3'
+                    )
+                    
+                    if not voice_client.is_playing():
+                        voice_client.play(audio_source)
+                        
+                        # Update message if provided
+                        if message:
+                            try:
+                                embed = message.embeds[0] if message.embeds else None
+                                if embed:
+                                    for i, field in enumerate(embed.fields):
+                                        if field.name == "🎤":
+                                            embed.set_field_at(i, name="🎤", value=f"*Donnie responds to {speaker}*", inline=False)
+                                            break
+                                    await message.edit(embed=embed)
+                            except Exception as e:
+                                print(f"⚠️ Message update failed: {e}")
+                else:
+                    print(f"❌ TTS API error: {response.status}")
+                    
+    except Exception as e:
+        print(f"❌ TTS error for guild {guild_id}: {e}")
+
+def create_tts_version(dm_response: str) -> str:
+    """Create TTS-optimized version of DM response"""
+    # Remove Discord formatting
+    clean_text = dm_response.replace("**", "").replace("*", "")
+    
+    # Remove excessive punctuation
+    clean_text = clean_text.replace("...", ".")
+    
+    # Remove action descriptions in brackets
+    import re
+    clean_text = re.sub(r'\[.*?\]', '', clean_text)
+    
+    # Remove dice roll results (keep descriptions)
+    clean_text = re.sub(r'\(\d+\s*[+-]\s*\d+\s*=\s*\d+\)', '', clean_text)
+    
+    # Clean up spacing
+    clean_text = ' '.join(clean_text.split())
+    
+    return clean_text.strip()
+
+def is_voice_active(guild_id: int) -> bool:
+    """Check if voice is active for guild"""
+    return (guild_id in voice_clients and 
+            voice_clients[guild_id].is_connected() and 
+            tts_enabled.get(guild_id, False))
+
+# ====== HELPER FUNCTIONS (PRESERVE YOUR EXISTING ONES) ======
+def is_user_in_voice(interaction):
+    """Check if user is in a voice channel"""
+    return (isinstance(interaction.user, discord.Member) and 
+            interaction.user.voice and 
+            interaction.user.voice.channel)
+
+def get_voice_channel(interaction):
+    """Get the user's voice channel"""
+    if isinstance(interaction.user, discord.Member) and interaction.user.voice:
+        return interaction.user.voice.channel
+    return None
+
+# ====== UPDATED ON_READY FUNCTION ======
+@bot.event
+async def on_ready():
+    """FIXED: Proper initialization order with voice functions available early"""
+    global episode_commands, character_progression, unified_response_system_instance
+    global memory_database_adapter
+
+    print(f'⚡ {bot.user} is ready for Storm King\'s Thunder!')
+    print(f'🏔️ Giants threaten the Sword Coast!')
+    
+    # ====== VOICE SYSTEM STATUS CHECK ======
+    if FFMPEG_AVAILABLE:
+        openai_key = os.getenv('OPENAI_API_KEY')
+        if openai_key:
+            print("🎤 Donnie the DM is ready to speak!")
+            print("🎤 Features: Safe Member/User checking, proper error handling, timeout protection")
+        else:
+            print("⚠️ OPENAI_API_KEY not found - voice features will be limited to basic sounds")
+    else:
+        print("⚠️ FFmpeg not detected - voice features disabled")
+    
+    print(f'⚔️ Enhanced Combat System: {"✅ Active" if COMBAT_AVAILABLE else "❌ Disabled"}')
+    
+    # ====== DATABASE INITIALIZATION WITH ENHANCED SCHEMA ======
+    if DATABASE_AVAILABLE:
         try:
-            voice_client = await asyncio.wait_for(
-                voice_channel.connect(), 
-                timeout=10.0
+            print("🔄 Initializing database with enhanced memory schema...")
+            
+            # Step 1: Initialize core database
+            init_database()
+            print("✅ Core database initialized")
+            
+            # Step 2: Upgrade to enhanced memory schema
+            try:
+                from database.enhanced_schema import upgrade_database_schema
+                upgrade_database_schema()
+                print("✅ Enhanced memory schema upgraded successfully")
+            except Exception as e:
+                print(f"⚠️ Enhanced schema upgrade failed: {e}")
+                # Continue with core database only
+            
+            # Step 3: Create REAL memory adapter
+            memory_database_adapter = MemoryDatabaseAdapter(
+                EpisodeOperations, CharacterOperations, GuildOperations
             )
-        except asyncio.TimeoutError:
-            await interaction.response.send_message("❌ Timed out joining voice channel! Channel might be full or there may be network issues.", ephemeral=True)
-            return
-        except discord.ClientException as e:
-            await interaction.response.send_message(f"❌ Connection error: {e}", ephemeral=True)
-            return
-        except discord.opus.OpusNotLoaded:
-            await interaction.response.send_message("❌ Voice codec not loaded! Bot configuration issue.", ephemeral=True)
-            return
-        
-        # Store voice client
-        voice_clients[guild_id] = voice_client
-        tts_enabled[guild_id] = True
-        voice_speed[guild_id] = 1.25  # Default faster speed for gameplay
-        
-        # Success embed
-        embed = discord.Embed(
-            title="🎤 Donnie the DM Joins!",
-            description=f"*Donnie's expressive Fable voice echoes through {voice_channel.name}*",
-            color=0x32CD32
-        )
-        
-        embed.add_field(
-            name="🗣️ ENHANCED Voice Activated",
-            value="Donnie will now narrate optimized DM responses with Continue buttons for faster gameplay!",
-            inline=False
-        )
-        
-        if PERSISTENT_MEMORY_AVAILABLE:
-            embed.add_field(
-                name="🧠 Enhanced Memory Active",
-                value="Donnie will remember conversations, NPCs, and plot threads across episodes!",
-                inline=False
+            print("✅ Real memory adapter initialized")
+            
+            # Step 4: Test database health
+            if health_check():
+                stats = get_database_stats()
+                print(f"📊 Database stats: {stats}")
+                
+                # Test memory tables
+                try:
+                    from database.database import get_db_connection
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    
+                    # Check if enhanced memory tables exist
+                    memory_tables = ['conversation_memories', 'npc_memories', 'memory_consolidation']
+                    for table in memory_tables:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                        if cursor.fetchone():
+                            print(f"✅ Memory table '{table}' exists")
+                        else:
+                            print(f"❌ Memory table '{table}' missing")
+                    
+                    conn.close()
+                    
+                except Exception as e:
+                    print(f"⚠️ Memory table check failed: {e}")
+            else:
+                print("⚠️ Database health check failed")
+                
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            DATABASE_AVAILABLE = False
+            memory_database_adapter = None
+    else:
+        print("⚠️ Database features disabled")
+        memory_database_adapter = None
+    
+    # ====== UNIFIED RESPONSE SYSTEM INITIALIZATION ======
+    if UNIFIED_RESPONSE_AVAILABLE:
+        try:
+            print("🔄 Initializing unified response system with REAL memory...")
+            
+            # Check if we have real memory operations
+            memory_available = (DATABASE_AVAILABLE and 
+                              memory_database_adapter and 
+                              hasattr(memory_database_adapter, 'memory_ops') and 
+                              memory_database_adapter.memory_ops is not None)
+            
+            unified_response_system_instance = initialize_unified_response_system(
+                claude_client=claude_client,
+                campaign_context=campaign_context,
+                persistent_memory_available=memory_available,
+                database_operations=memory_database_adapter,
+                max_response_length=MAX_RESPONSE_LENGTH,
+                response_timeout=RESPONSE_TIMEOUT
             )
-        
-        if COMBAT_AVAILABLE:
-            embed.add_field(
-                name="⚔️ Combat System Active",
-                value="Donnie will track combat encounters with auto-updating display messages!",
-                inline=False
+            
+            print(f"🎯 Unified DM Response System initialized with memory: {'✅' if memory_available else '❌'}")
+            
+        except Exception as e:
+            print(f"❌ Failed to initialize unified response system: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("⚠️ Unified response system not available - using basic fallbacks")
+    
+    # ====== EPISODE MANAGEMENT INITIALIZATION (VOICE FUNCTIONS NOW AVAILABLE) ======
+    if EPISODE_MANAGER_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing episode management...")
+            episode_commands = EpisodeCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_clients,
+                tts_enabled=tts_enabled,
+                add_to_voice_queue_func=add_to_voice_queue,  # ✅ Now defined!
+                episode_operations=EpisodeOperations,
+                character_operations=CharacterOperations,
+                guild_operations=GuildOperations,
+                claude_client=claude_client,
+                sync_function=sync_campaign_context_with_database,
+                unified_response_system=unified_response_system_instance
             )
+
+            print("✅ Episode management system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Episode management initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            episode_commands = None
+    else:
+        print("⚠️ Episode management disabled (missing dependencies)")
+        episode_commands = None
+    
+    # ====== CHARACTER PROGRESSION INITIALIZATION (VOICE FUNCTIONS NOW AVAILABLE) ======
+    if CHARACTER_PROGRESSION_AVAILABLE and DATABASE_AVAILABLE:
+        try:
+            print("🔄 Initializing character progression...")
+            character_progression = CharacterProgressionCommands(
+                bot=bot,
+                campaign_context=campaign_context,
+                voice_clients=voice_clients,
+                tts_enabled=tts_enabled,
+                add_to_voice_queue_func=add_to_voice_queue,  # ✅ Now defined!
+                character_operations=CharacterOperations,
+                episode_operations=EpisodeOperations
+            )
+
+            print("✅ Character progression system initialized with database support")
+        except Exception as e:
+            print(f"⚠️ Character progression initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            character_progression = None
+    else:
+        print("⚠️ Character progression disabled (missing dependencies)")
+        character_progression = None
+    
+    # ====== COMBAT SYSTEM INITIALIZATION ======
+    if COMBAT_AVAILABLE:
+        try:
+            print("🔄 Initializing combat system...")
+            if 'initialize_combat_system' in globals() and callable(initialize_combat_system):
+                await initialize_combat_system(bot, campaign_context)
+                print("✅ Combat system initialized successfully")
+                
+                # Get combat status
+                if 'get_combat_status' in globals():
+                    combat_status = get_combat_status()
+                    print(f"🔍 Combat system status: {combat_status}")
+                else:
+                    print("✅ Combat system initialized successfully")
+            else:
+                print("⚠️ Combat system initialize function not found")
+        except Exception as e:
+            print(f"⚠️ Combat system initialization failed: {e}")
+    
+    # ====== COMMAND SYNCHRONIZATION ======
+    print('🔄 Syncing slash commands...')
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} slash commands')
         
-        embed.add_field(
-            name="🔧 Controls",
-            value="`/mute_donnie` - Disable TTS\n`/unmute_donnie` - Enable TTS\n`/leave_voice` - Donnie leaves voice\n`/donnie_speed` - Adjust speaking speed",
-            inline=False
-        )
+        # ====== FINAL STATUS REPORT ======
+        features = {
+            "Database": "✅" if DATABASE_AVAILABLE else "❌",
+            "Unified Response System": "✅" if UNIFIED_RESPONSE_AVAILABLE else "❌",
+            "Episodes": "✅" if episode_commands else "❌",
+            "Progression": "✅" if character_progression else "❌",
+            "Persistent Memory": "✅" if PERSISTENT_MEMORY_AVAILABLE else "❌",
+            "Enhanced Combat": "✅" if COMBAT_AVAILABLE else "❌",
+            "Continue Buttons": "✅",
+            "PDF Upload": "✅" if hasattr(bot, 'pdf_character_commands') else "❌",
+            "FFmpeg (Voice)": "✅" if FFMPEG_AVAILABLE else "❌"
+        }
         
-        await interaction.response.send_message(embed=embed)
+        print("🎲 Storm King's Thunder Bot Feature Status:")
+        for feature, status in features.items():
+            print(f"   {status} {feature}")
+            
+        print("🎉 Ready for UNIFIED epic adventures!")
         
-        # Test voice with welcome message
-        welcome_text = "Well, well. Another group of 'adventurers.' I'm Donnie, your long-suffering Dungeon Master, and I can already sense the chaos brewing. I'll narrate this Storm King's Thunder campaign with hallucinating combat scenes and definitely not broken continue buttons, because I've learned not to trust you people with anything more complicated than a coin flip."
-        if COMBAT_AVAILABLE:
-            welcome_text += " Combat will be tracked automatically with separate display messages!"
-        welcome_text += " Just describe what you want to do, and let the adventure unfold!"
+        # ====== SYSTEM VERIFICATION ======
+        if UNIFIED_RESPONSE_AVAILABLE and unified_response_system_instance:
+            try:
+                status = get_response_system_status()
+                if "Not Initialized" not in str(status):
+                    print("✅ Unified response system verified working!")
+                else:
+                    print("⚠️ Unified response system initialization issue detected")
+            except Exception as e:
+                print(f"⚠️ Could not verify unified response system: {e}")
         
-        await add_to_voice_queue(guild_id, welcome_text, "Donnie")
+        # Verify episode management
+        if episode_commands:
+            print("✅ Episode management verified working!")
+        else:
+            print("⚠️ Episode management not properly initialized")
+        
+        # Verify voice functions
+        if 'add_to_voice_queue' in globals():
+            print("✅ Voice functions verified working!")
+        else:
+            print("⚠️ Voice functions not properly initialized")
         
     except Exception as e:
-        # Clean up on error
-        if guild_id in voice_clients:
-            try:
-                await voice_clients[guild_id].disconnect()
-                del voice_clients[guild_id]
-            except:
-                pass
-        
-        error_msg = f"❌ Failed to join voice channel: {str(e)}"
-        
-        # Specific error help
-        if "opus" in str(e).lower():
-            error_msg += "\n💡 Voice codec issue - try restarting the bot."
-        elif "permission" in str(e).lower():
-            error_msg += "\n💡 Check bot permissions in voice channel."
-        elif "timeout" in str(e).lower():
-            error_msg += "\n💡 Connection timeout - channel might be full."
-        
-        try:
-            await interaction.response.send_message(error_msg, ephemeral=True)
-        except:
-            try:
-                await interaction.followup.send(error_msg, ephemeral=True)
-            except:
-                print(f"Failed to send error message: {error_msg}")
+        print(f'❌ Failed to sync commands: {e}')
+        import traceback
+        traceback.print_exc()
 
 @bot.tree.command(name="response_status", description="Check DM response system status")
 async def check_response_status(interaction: discord.Interaction):
@@ -3570,8 +3903,6 @@ else:
 
 print("="*60)
 
-# ====== COMMAND AVAILABILITY CHECK (Add this to your on_ready function) ======
-# Add this inside your on_ready() function after syncing commands:
 
 async def check_command_availability():
     """Check which commands are actually available after sync"""
@@ -3748,8 +4079,6 @@ if __name__ == "__main__":
         input("Press Enter to exit...")
         exit(1)
     
-    # Print comprehensive system status, removed from on_ready to avoid double printing and inaccuracies
-    #print_system_status()
     
     # TRY TO START THE BOT WITH FULL ERROR HANDLING
     print("🚀 Starting Discord bot...")
