@@ -56,6 +56,18 @@ def get_voice_channel(interaction: discord.Interaction):
         return None
     return interaction.user.voice.channel
 
+try:
+    from combat_system.combat_integration import initialize_combat_system, get_combat_integration
+    from unified_dm_response import generate_dm_response_with_combat  # New import for combat integration
+    print("✅ Enhanced Combat System with unified integration loaded!")
+    COMBAT_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Combat system not available: {e}")
+    COMBAT_AVAILABLE = False
+    # Fallback: define get_combat_integration to avoid unbound errors
+    def get_combat_integration():
+        return None
+
 # ====== Memory System Adapter ======
 
 class MemoryDatabaseAdapter:
@@ -687,6 +699,109 @@ async def process_unified_dm_response_background(user_id: str, player_input: str
         import traceback
         traceback.print_exc()
         await handle_dm_response_error(message, user_id)
+
+async def process_unified_dm_response_background_with_combat(user_id: str, player_input: str, message, 
+                                                           character_name: str, char_data: dict, 
+                                                           player_name: str, guild_id: int, channel_id: int, 
+                                                           voice_will_speak: bool):
+    """ENHANCED background processing with combat integration"""
+    try:
+        guild_id_str = str(guild_id)
+        
+        # Ensure guild_id is set in context
+        if campaign_context.get("guild_id") != guild_id_str:
+            campaign_context["guild_id"] = guild_id_str
+        
+        print(f"🎯⚔️ Enhanced combat processing for {character_name} in channel {channel_id}")
+        
+        # Get episode ID
+        episode_id = campaign_context.get("current_episode", 1)
+        if DATABASE_AVAILABLE:
+            try:
+                current_episode = EpisodeOperations.get_current_episode(guild_id_str)
+                if current_episode:
+                    episode_id = current_episode.id
+            except:
+                pass
+        
+        # ✅ ENHANCED: Generate response with combat integration
+        if UNIFIED_RESPONSE_AVAILABLE:
+            try:
+                # Check if the enhanced unified system supports combat
+                if (unified_response_system_instance and 
+                    hasattr(unified_response_system_instance, '_generate_response_with_combat')):
+                    
+                    print("🎯⚔️ Using combat-integrated response generation")
+                    dm_response, response_mode = await unified_response_system_instance._generate_response_with_combat(
+                        user_id=user_id,
+                        player_input=player_input,
+                        guild_id=guild_id_str,
+                        episode_id=episode_id,
+                        channel_id=channel_id,  # Pass channel_id for combat
+                        character_name=character_name
+                    )
+                    
+                    print(f"✅ Combat-integrated response generated using {response_mode} mode")
+                    
+                else:
+                    # Fallback to existing unified system
+                    print("🎯 Using standard unified response (combat integration not available)")
+                    dm_response, response_mode = await generate_dm_response(
+                        user_id=user_id,
+                        player_input=player_input,
+                        guild_id=guild_id_str,
+                        episode_id=episode_id
+                    )
+                
+            except Exception as e:
+                print(f"❌ Enhanced combat response error: {e}")
+                # Emergency fallback to existing system
+                await process_unified_dm_response_background(
+                    user_id, player_input, message, character_name, char_data, 
+                    player_name, guild_id, channel_id, voice_will_speak
+                )
+                return
+        else:
+            # Basic fallback if unified system not available
+            dm_response = "Donnie considers the situation as the giant crisis unfolds around you..."
+            response_mode = "basic_fallback"
+        
+        # Update Discord message
+        tts_text = create_tts_version(dm_response)
+        
+        embed = message.embeds[0]
+        for i, field in enumerate(embed.fields):
+            if field.name == "🐉 Donnie the DM":
+                # Include response mode indicator for debugging
+                if response_mode not in ["enhanced_memory", "enhanced_memory_v2"] and len(dm_response) < 400:
+                    mode_indicator = f" *({response_mode})*"
+                    embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response + mode_indicator, inline=False)
+                else:
+                    embed.set_field_at(i, name="🐉 Donnie the DM", value=dm_response, inline=False)
+                break
+        
+        view = ContinueView(user_id)
+        await message.edit(embed=embed, view=view)
+        
+        # Background memory storage (only if enhanced memory was used)
+        if UNIFIED_RESPONSE_AVAILABLE and response_mode in ["enhanced_memory", "enhanced_memory_v2"]:
+            asyncio.create_task(store_interaction_background(
+                guild_id_str, episode_id, user_id, player_input, dm_response
+            ))
+        
+        # Voice processing (unchanged)
+        if voice_will_speak:
+            await add_to_voice_queue(guild_id, tts_text, character_name, message)
+            
+    except Exception as e:
+        print(f"❌ Enhanced combat processing error: {e}")
+        import traceback
+        traceback.print_exc()
+        # Safe fallback to existing processor
+        await process_unified_dm_response_background(
+            user_id, player_input, message, character_name, char_data, 
+            player_name, guild_id, channel_id, voice_will_speak
+        )
 
 async def process_unified_dm_response_background_enhanced(user_id: str, player_input: str, message, 
                                                         character_name: str, char_data: dict, 
@@ -2231,18 +2346,19 @@ async def start_adventure(interaction: discord.Interaction):
 @bot.tree.command(name="action", description="Take an action in the Storm King's Thunder campaign")
 @app_commands.describe(what_you_do="Describe what your character does or says")
 async def take_action_enhanced(interaction: discord.Interaction, what_you_do: str):
-    """UNIFIED action processing with enhanced combat integration"""
+    """ENHANCED action processing with combat integration"""
     user_id = str(interaction.user.id)
     player_name = interaction.user.display_name
     
-    # ✅ UNIFIED: Ensure guild_id is properly set in campaign context
+    # ✅ ENHANCED: Ensure guild_id and channel_id are properly set
     guild_id_int = interaction.guild.id  # This is an int from Discord
     guild_id_str = str(guild_id_int)     # Convert to string for database operations
+    channel_id = interaction.channel.id if interaction.channel else 0  # Get channel_id for combat
     
     # Update campaign context with current guild_id
     campaign_context["guild_id"] = guild_id_str
     
-    print(f"🎯 UNIFIED Action: {player_name} in guild {guild_id_str}: '{what_you_do[:50]}...'")
+    print(f"🎯 ENHANCED Action: {player_name} in guild {guild_id_str}, channel {channel_id}: '{what_you_do[:50]}...'")
     
     # Quick validation
     if user_id not in campaign_context["characters"]:
@@ -2286,7 +2402,6 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     )
     
     # Voice status - use int guild_id for voice operations
-    channel_id = interaction.channel_id if interaction.channel_id is not None else 0
     voice_will_speak = (guild_id_int in voice_clients and 
                        voice_clients[guild_id_int].is_connected() and 
                        tts_enabled.get(guild_id_int, False))
@@ -2294,22 +2409,22 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
     
-    # ✅ UNIFIED: Updated footer to show unified system status
+    # ✅ ENHANCED: Updated footer to show combat system status
     footer_text = f"Level {char_data['level']} • {char_data['background']}"
     if UNIFIED_RESPONSE_AVAILABLE:
         footer_text += " • 🎯 Unified Response System"
     if COMBAT_AVAILABLE:
-        footer_text += " • ⚔️ Combat Tracking"
+        footer_text += " • ⚔️ Enhanced Combat"
     embed.set_footer(text=footer_text)
     
     # Send immediate response
     await interaction.response.send_message(embed=embed)
     message = await interaction.original_response()
     
-    # ✅ UNIFIED: Use the unified background processor
-    asyncio.create_task(process_unified_dm_response_background(
+    # ✅ ENHANCED: Use the new combat-integrated background processor
+    asyncio.create_task(process_unified_dm_response_background_with_combat(
         user_id, what_you_do, message, character_name, char_data, player_name, 
-        guild_id_int, channel_id, voice_will_speak
+        guild_id_int, channel_id, voice_will_speak  # Added channel_id for combat
     ))
 
 @bot.tree.command(name="roll", description="Roll dice for your Storm King's Thunder adventure")

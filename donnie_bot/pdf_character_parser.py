@@ -84,7 +84,7 @@ class PDFCharacterCommands:
         async def upload_character_sheet(interaction: discord.Interaction, 
                                        character_sheet: discord.Attachment, 
                                        replace_existing: bool = False):
-            """Upload and parse a PDF character sheet"""
+            """Upload and parse PDF character sheet with FULL registration integration"""
             print(f"📄 Character sheet upload triggered by {interaction.user.display_name}")
             await self._handle_character_sheet_upload(interaction, character_sheet, replace_existing)
         
@@ -97,6 +97,165 @@ class PDFCharacterCommands:
             await self._show_upload_help(interaction)
         
         print("✅ Both PDF commands registered with bot.tree")
+    
+    async def _register_parsed_character(self, interaction: discord.Interaction, character_data: Dict):
+        """Register the parsed character into the main campaign system"""
+        
+        user_id = str(interaction.user.id)
+        player_name = interaction.user.display_name
+        
+        print(f"🔄 Registering parsed character for {player_name} (ID: {user_id})")
+        
+        # Build comprehensive character profile (same format as manual /character command)
+        character_profile = {
+            "name": character_data.get("name", "Unknown"),
+            "race": character_data.get("race", "Unknown"),
+            "class": character_data.get("class", "Unknown"), 
+            "level": character_data.get("level", 1),
+            "background": character_data.get("background", "Unknown"),
+            "stats": self._format_ability_scores(character_data.get("ability_scores", {})),
+            "equipment": self._format_equipment(character_data.get("equipment", {})),
+            "spells": self._format_spells(character_data.get("spellcasting", {})),
+            "affiliations": self._format_affiliations(character_data.get("affiliations", {})),
+            "personality": self._format_personality(character_data.get("personality", {})),
+            "player_name": player_name,
+            "discord_user_id": user_id,
+            "full_character_data": character_data  # Store the complete parsed data
+        }
+        
+        # Create formatted character description for Claude (same as manual registration)
+        character_description = f"""
+NAME: {character_profile['name']}
+PLAYER: {player_name} (Discord ID: {user_id})
+RACE & CLASS: {character_profile['race']} {character_profile['class']} (Level {character_profile['level']})
+BACKGROUND: {character_profile['background']}
+ABILITY SCORES: {character_profile['stats']}
+EQUIPMENT: {character_profile['equipment']}
+SPELLS: {character_profile['spells']}
+AFFILIATIONS: {character_profile['affiliations']}
+PERSONALITY: {character_profile['personality']}
+"""
+        
+        # ✅ CRITICAL: Store in the same dictionaries that episode system checks
+        self.campaign_context["characters"][user_id] = character_description
+        self.campaign_context["players"][user_id] = {
+            "user_id": user_id,
+            "player_name": player_name,
+            "character_data": character_profile,
+            "character_description": character_description
+        }
+        
+        print(f"✅ PDF character {character_profile['name']} registered for {player_name}")
+        
+        # Set guild_id in campaign context if not set
+        if self.campaign_context.get("guild_id") is None:
+            guild_id_str = str(interaction.guild.id)
+            self.campaign_context["guild_id"] = guild_id_str
+            print(f"✅ Set guild_id in campaign_context: {guild_id_str}")
+    
+    def _format_ability_scores(self, ability_scores: Dict) -> str:
+        """Format ability scores for character description"""
+        if not ability_scores:
+            return "From PDF"
+        
+        try:
+            formatted = []
+            for ability, score in ability_scores.items():
+                if isinstance(score, int):
+                    formatted.append(f"{ability.upper()}: {score}")
+            return ", ".join(formatted) if formatted else "From PDF"
+        except:
+            return "From PDF"
+    
+    def _format_equipment(self, equipment: Dict) -> str:
+        """Format equipment for character description"""
+        if not equipment:
+            return "From PDF"
+        
+        try:
+            items = []
+            for category, item_list in equipment.items():
+                if isinstance(item_list, list) and item_list:
+                    items.extend(item_list[:3])  # Limit to first 3 items per category
+            
+            if items:
+                return ", ".join(items[:5]) + ("..." if len(items) > 5 else "")
+            return "From PDF"
+        except:
+            return "From PDF"
+    
+    def _format_spells(self, spellcasting: Dict) -> str:
+        """Format spells for character description"""
+        if not spellcasting or not spellcasting.get("spellcasting_class"):
+            return "None"
+        
+        try:
+            spells = []
+            cantrips = spellcasting.get("cantrips", [])
+            if cantrips:
+                spells.extend(cantrips[:3])
+            
+            spells_known = spellcasting.get("spells_known", {})
+            for level, spell_list in spells_known.items():
+                if isinstance(spell_list, list) and spell_list:
+                    spells.extend(spell_list[:2])  # Limit to 2 per level
+                    if len(spells) >= 5:  # Don't overwhelm the description
+                        break
+            
+            if spells:
+                return ", ".join(spells[:5]) + ("..." if len(spells) > 5 else "")
+            return f"{spellcasting.get('spellcasting_class')} Spellcaster"
+        except:
+            return "From PDF"
+    
+    def _format_affiliations(self, affiliations: Dict) -> str:
+        """Format affiliations for character description"""
+        if not affiliations:
+            return "None"
+        
+        try:
+            all_affiliations = []
+            for category, affiliation_list in affiliations.items():
+                if isinstance(affiliation_list, list) and affiliation_list:
+                    all_affiliations.extend(affiliation_list[:2])  # Limit per category
+            
+            if all_affiliations:
+                return ", ".join(all_affiliations[:3])
+            return "None"
+        except:
+            return "None"
+    
+    def _format_personality(self, personality: Dict) -> str:
+        """Format personality for character description"""
+        if not personality:
+            return "From PDF"
+        
+        try:
+            traits = []
+            
+            # Add personality traits
+            if personality.get("personality_traits"):
+                traits.extend(personality["personality_traits"][:2])
+            
+            # Add ideals
+            if personality.get("ideals"):
+                traits.extend(personality["ideals"][:1])
+            
+            # Add bonds
+            if personality.get("bonds"):
+                traits.extend(personality["bonds"][:1])
+            
+            if traits:
+                return "; ".join(traits[:3])
+            
+            # Fallback to backstory if available
+            if personality.get("backstory"):
+                backstory = personality["backstory"][:100]
+                return backstory + ("..." if len(personality["backstory"]) > 100 else "")
+            
+            return "From PDF"
+        except:
+            return "From PDF"
     
     async def _handle_character_sheet_upload(self, interaction: discord.Interaction, 
                                            attachment: discord.Attachment, replace_existing: bool):
@@ -174,17 +333,59 @@ class PDFCharacterCommands:
             print(f"✅ Successfully parsed character: {character_data.get('name', 'Unknown')}")
             
             # Update status
-            embed.set_field_at(1, name="⏳ Status", value="✅ Parsing complete! Please confirm...", inline=False)
+            embed.set_field_at(1, name="⏳ Status", value="✅ Parsing complete! Registering character...", inline=False)
             await interaction.edit_original_response(embed=embed)
             
-            # Show confirmation
-            await self._show_confirmation(interaction, character_data, user_id, player_name)
+            # ✅ NEW: Register the character into main system
+            await self._register_parsed_character(interaction, character_data)
+            
+            # Show success with full integration
+            await self._show_registration_success(interaction, character_data, player_name)
             
         except Exception as e:
             print(f"❌ Character sheet upload error: {e}")
             import traceback
             traceback.print_exc()
             await self._show_upload_error(interaction, str(e))
+    
+    async def _show_registration_success(self, interaction: discord.Interaction, character_data: Dict, player_name: str):
+        """Show successful registration with campaign integration"""
+        embed = discord.Embed(
+            title="✅ Character Registered Successfully!",
+            description=f"**{character_data['name']}** has been parsed and registered!",
+            color=0x32CD32
+        )
+        
+        embed.add_field(
+            name=f"⚔️ {character_data['name']}",
+            value=f"**{character_data.get('race', 'Unknown')} {character_data.get('class', 'Unknown')}** (Level {character_data.get('level', 1)})\n*Player: {player_name}*",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="✅ Ready for Adventure",
+            value="Use `/start_episode` to begin your next adventure!\nUse `/party` to see all registered characters!",
+            inline=False
+        )
+        
+        # Show what was extracted
+        if character_data.get('background'):
+            embed.add_field(name="📚 Background", value=character_data['background'], inline=True)
+        
+        if character_data.get('equipment'):
+            equipment_text = self._format_equipment(character_data['equipment'])
+            if equipment_text != "From PDF":
+                embed.add_field(name="⚔️ Equipment", value=equipment_text, inline=True)
+        
+        if character_data.get('spellcasting') and character_data['spellcasting'].get('spellcasting_class'):
+            spells_text = self._format_spells(character_data['spellcasting'])
+            if spells_text not in ["None", "From PDF"]:
+                embed.add_field(name="✨ Spells", value=spells_text, inline=True)
+        
+        # Update the original message with success
+        await interaction.edit_original_response(content=None, embed=embed)
+        
+        print(f"✅ PDF character {character_data['name']} fully integrated into campaign")
     
     async def _extract_pdf_text(self, attachment: discord.Attachment) -> str:
         """Extract text from PDF using PyPDF2 and PyMuPDF as fallback"""
@@ -234,9 +435,6 @@ class PDFCharacterCommands:
         except Exception as e:
             print(f"❌ PyPDF2 extraction failed: {e}")
             raise ValueError("Could not extract text from PDF using any method")
-    
-    # Include all the other methods from the original file...
-    # (I'll include the key ones for space, but copy all methods from your original)
     
     async def _parse_character_sheet_with_ai_retry(self, pdf_text: str, player_name: str, user_id: str, interaction, embed) -> Optional[Dict[str, Any]]:
         """Parse character sheet with retry logic for API errors"""
@@ -484,7 +682,6 @@ CRITICAL:
             # Re-raise the exception so retry logic can handle it
             raise e
     
-    # Add placeholder methods for the remaining functionality
     async def _show_parsing_error(self, interaction, pdf_text):
         """Show parsing error with manual entry option"""
         embed = discord.Embed(
@@ -497,6 +694,11 @@ CRITICAL:
             value="1. **Try Again Later**: The AI service should be back to normal soon\n"
                   "2. **Manual Entry**: Use `/character` to register manually\n"
                   "3. **Wait & Retry**: Come back in a few minutes and try uploading again",
+            inline=False
+        )
+        embed.add_field(
+            name="📝 Alternative",
+            value="Use `/character` to manually register your character with full details.",
             inline=False
         )
         await interaction.edit_original_response(embed=embed)
@@ -513,23 +715,9 @@ CRITICAL:
             value=f"```{error_msg}```",
             inline=False
         )
-        await interaction.edit_original_response(embed=embed)
-    
-    async def _show_confirmation(self, interaction, character_data, user_id, player_name):
-        """Show confirmation dialog - simplified version for debugging"""
-        embed = discord.Embed(
-            title="✅ Character Parsed Successfully!",
-            description=f"**{character_data.get('name')}** has been parsed from your PDF!",
-            color=0x32CD32
-        )
         embed.add_field(
-            name="📋 Basic Info",
-            value=f"**Race:** {character_data.get('race')}\n**Class:** {character_data.get('class')}\n**Level:** {character_data.get('level')}",
-            inline=False
-        )
-        embed.add_field(
-            name="✅ Success!",
-            value="Character data has been extracted successfully. Full integration with confirmation system would go here.",
+            name="📝 Alternative",
+            value="Use `/character` to manually register your character.",
             inline=False
         )
         await interaction.edit_original_response(embed=embed)
@@ -551,6 +739,24 @@ CRITICAL:
         embed.add_field(
             name="📋 Supported Formats",
             value="• **PDF files only** (max 10MB)\n• Standard D&D 5e character sheets\n• Most online character sheet generators\n• Hand-filled sheets (if clearly readable)",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🔄 How It Works",
+            value="1. Upload your PDF character sheet\n2. Donnie extracts text from the PDF\n3. Claude AI analyzes and parses character data\n4. Character is automatically registered for campaigns\n5. Ready to use with `/start_episode` and `/party`!",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="⚠️ Troubleshooting",
+            value="• **Parsing fails?** Try a different PDF format or use `/character` for manual entry\n• **AI overloaded?** Wait a few minutes and try again\n• **Missing data?** The AI extracts what it can find - you can update with `/update_character`",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🎯 Best Results",
+            value="• Use standard D&D 5e character sheet formats\n• Ensure text is clearly readable\n• Avoid heavily stylized or custom layouts\n• Include all character information on the sheet",
             inline=False
         )
         

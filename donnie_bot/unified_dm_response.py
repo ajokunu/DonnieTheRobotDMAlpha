@@ -1,18 +1,28 @@
-# unified_dm_response.py - COMPLETE FILE
+# unified_dm_response.py - COMPLETE FILE WITH AI COMBAT INTEGRATION
 """
-Unified DM Response System for Storm King's Thunder
+Unified DM Response System for Storm King's Thunder with AI Combat Integration
 Single entry point for all DM response generation with clear fallback hierarchy:
 Enhanced Memory → Streamlined → Basic Fallback
 
 This replaces all duplicate response generators in main.py and enhanced_dm_system.py
+Now includes AI combat detection and automatic monster generation.
 """
 
 import asyncio
 import time
 import random
-from typing import Dict, Optional, Tuple, List, Any  # Make sure Optional is imported
+from typing import Dict, Optional, Tuple, List, Any
 from enum import Enum
 from datetime import datetime
+
+# Add AI combat integration with error handling
+try:
+    from ai_combat_manager import AICombatManager, CombatInitiator
+    AI_COMBAT_AVAILABLE = True
+    print("✅ AI Combat Manager available")
+except ImportError:
+    AI_COMBAT_AVAILABLE = False
+    print("⚠️ AI Combat Manager not available")
 
 class ResponseMode(Enum):
     """Response generation modes in order of preference"""
@@ -29,6 +39,7 @@ class UnifiedDMResponseSystem:
     - Single entry point for all DM responses
     - Intelligent fallback system
     - Memory integration when available
+    - AI combat detection and initiation
     - Performance optimizations
     - Centralized error handling
     """
@@ -45,6 +56,20 @@ class UnifiedDMResponseSystem:
         self.database_operations = database_operations
         self.max_response_length = max_response_length
         self.response_timeout = response_timeout
+        
+        # Add AI combat integration
+        self.ai_combat_manager = None
+        self.combat_initiator = None
+        
+        if AI_COMBAT_AVAILABLE:
+            try:
+                self.ai_combat_manager = AICombatManager(claude_client, campaign_context)
+                self.combat_initiator = CombatInitiator(self.ai_combat_manager)
+                print("✅ AI Combat integration initialized")
+            except Exception as e:
+                print(f"⚠️ AI Combat integration failed: {e}")
+        else:
+            print("⚠️ AI Combat integration not available")
         
         # Performance tracking
         self.response_count = {"enhanced_memory": 0, "streamlined": 0, "basic_fallback": 0, "emergency_fallback": 0}
@@ -88,18 +113,20 @@ class UnifiedDMResponseSystem:
             "tone": "Epic fantasy adventure with real consequences and meaningful choices."
         }
         
-        print(f"🎯 Unified DM Response System initialized (Memory: {'✅' if self.persistent_memory_available else '❌'})")
+        print(f"🎯 Unified DM Response System initialized (Memory: {'✅' if self.persistent_memory_available else '❌'}, Combat AI: {'✅' if self.ai_combat_manager else '❌'})")
     
     async def generate_dm_response(self, user_id: str, player_input: str, 
-                                guild_id: str, episode_id: int) -> Tuple[str, ResponseMode]:
+                                guild_id: str, episode_id: int, 
+                                channel_id: Optional[int] = None) -> Tuple[str, ResponseMode]:
         """
-        MAIN ENTRY POINT: Generate DM response using unified system
+        MAIN ENTRY POINT: Generate DM response using unified system with AI combat integration
         
         Args:
             user_id: Discord user ID
             player_input: What the player wants to do
             guild_id: Discord guild ID  
             episode_id: Current episode ID
+            channel_id: Discord channel ID (for combat integration)
             
         Returns:
             Tuple of (response_text, mode_used)
@@ -107,6 +134,10 @@ class UnifiedDMResponseSystem:
         
         start_time = time.time()
         self.total_requests += 1
+        
+        # Get channel_id from parameter or temporarily stored value
+        if channel_id is None:
+            channel_id = getattr(self, '_current_channel_id', None)
         
         # Validate inputs
         if not self._validate_inputs(user_id, player_input, guild_id):
@@ -129,7 +160,7 @@ class UnifiedDMResponseSystem:
                 print("🧠 Attempting enhanced memory response...")
                 response = await asyncio.wait_for(
                     self._generate_enhanced_memory_response(
-                        user_id, player_input, guild_id, episode_id, character_name
+                        user_id, player_input, guild_id, episode_id, character_name, channel_id
                     ),
                     timeout=self.response_timeout
                 )
@@ -151,7 +182,7 @@ class UnifiedDMResponseSystem:
         try:
             print("⚡ Attempting streamlined response...")
             response = await asyncio.wait_for(
-                self._generate_streamlined_response(user_id, player_input, character_name),
+                self._generate_streamlined_response(user_id, player_input, character_name, channel_id),
                 timeout=self.response_timeout
             )
             
@@ -177,12 +208,16 @@ class UnifiedDMResponseSystem:
         return response, ResponseMode.BASIC_FALLBACK
     
     async def _generate_enhanced_memory_response(self, user_id: str, player_input: str, 
-                                        guild_id: str, episode_id: int, 
-                                        character_name: str) -> str:
-        """Generate response with enhanced memory context using REAL memory operations"""
+                                               guild_id: str, episode_id: int, 
+                                               character_name: str, channel_id: Optional[int] = None) -> str:
+        """Enhanced memory response with AI combat integration"""
         
         if not self.memory_ops:
             raise Exception("Memory operations not available")
+        
+        # Get channel_id from parameter or temporarily stored value
+        if channel_id is None:
+            channel_id = getattr(self, '_current_channel_id', None)
         
         # Get memory context using REAL memory operations
         try:
@@ -261,6 +296,35 @@ class UnifiedDMResponseSystem:
         else:
             dm_response = str(response.content[0]).strip()
         
+        # NEW: Check if combat should trigger
+        if self.ai_combat_manager and channel_id:
+            should_start_combat = self.ai_combat_manager.detect_combat_trigger(
+                player_input, dm_response
+            )
+            
+            if should_start_combat:
+                print("🎯 AI detected combat trigger, initiating combat...")
+                
+                # Create narrative context for monster generation
+                narrative_context = f"Scene: {self.campaign_context.get('current_scene', '')}\nPlayer action: {player_input}\nDM response: {dm_response}"
+                
+                # Initiate combat with AI-generated monsters
+                combat_result = await self.combat_initiator.initiate_ai_combat(
+                    channel_id=channel_id,
+                    narrative_context=narrative_context
+                )
+                
+                if combat_result:
+                    # Append combat info to response
+                    monsters_list = ", ".join(combat_result["monsters_added"])
+                    dm_response += f"\n\n⚔️ {combat_result['encounter_description']}\n**{monsters_list}** {'joins' if len(combat_result['monsters_added']) == 1 else 'join'} combat! Use `/initiative <roll>` to join the fight!"
+                    
+                    print(f"✅ Combat started with: {monsters_list}")
+                else:
+                    # Fallback if combat initiation failed
+                    dm_response += "\n\n⚔️ Combat begins! Use `/initiative <roll>` to join!"
+                    print("⚠️ Combat initiation failed, using manual combat prompt")
+        
         # Ensure response is under limit
         if len(dm_response) > self.max_response_length:
             dm_response = dm_response[:self.max_response_length-3] + "..."
@@ -271,8 +335,12 @@ class UnifiedDMResponseSystem:
         return dm_response
     
     async def _generate_streamlined_response(self, user_id: str, player_input: str, 
-                                           character_name: str) -> str:
-        """Generate streamlined response without memory features"""
+                                           character_name: str, channel_id: Optional[int] = None) -> str:
+        """Generate streamlined response with basic combat detection"""
+        
+        # Get channel_id from parameter or temporarily stored value
+        if channel_id is None:
+            channel_id = getattr(self, '_current_channel_id', None)
         
         # Get character and party info
         player_data = self.campaign_context["players"][user_id]
@@ -344,6 +412,17 @@ class UnifiedDMResponseSystem:
         else:
             dm_response = str(response.content[0]).strip()
         
+        # Basic combat detection for streamlined mode
+        if self.ai_combat_manager and channel_id:
+            should_start_combat = self.ai_combat_manager.detect_combat_trigger(
+                player_input, dm_response
+            )
+            
+            if should_start_combat:
+                dm_response += "\n\n⚔️ Combat begins! Use `/initiative <roll>` to join the fight!"
+                print("🎯 Basic combat detection triggered in streamlined mode")
+                # Note: Streamlined mode doesn't auto-generate monsters for performance
+        
         # Ensure response is under limit
         if len(dm_response) > self.max_response_length:
             dm_response = dm_response[:self.max_response_length-3] + "..."
@@ -358,11 +437,15 @@ class UnifiedDMResponseSystem:
                                                   character_name: str, channel_id: Optional[int] = None) -> str:
         """Enhanced memory response with structured context - SAFE VERSION"""
         
+        # Get channel_id from parameter or temporarily stored value
+        if channel_id is None:
+            channel_id = getattr(self, '_current_channel_id', None)
+        
         # SAFE: Fall back to original method if structured memory unavailable
         if not self.structured_memory:
             print("⚠️ Structured memory unavailable, using original method")
             return await self._generate_enhanced_memory_response(
-                user_id, player_input, guild_id, episode_id, character_name
+                user_id, player_input, guild_id, episode_id, character_name, channel_id
             )
         
         # SAFE: Try structured approach with fallback
@@ -387,6 +470,31 @@ class UnifiedDMResponseSystem:
             )
             
             dm_response = response.content[0].text.strip()
+            
+            # Combat detection for structured memory version
+            if self.ai_combat_manager and channel_id:
+                should_start_combat = self.ai_combat_manager.detect_combat_trigger(
+                    player_input, dm_response
+                )
+                
+                if should_start_combat:
+                    print("🎯 AI detected combat trigger in structured memory mode...")
+                    
+                    narrative_context = f"Scene: {self.campaign_context.get('current_scene', '')}\nPlayer action: {player_input}\nDM response: {dm_response}"
+                    
+                    combat_result = await self.combat_initiator.initiate_ai_combat(
+                        channel_id=channel_id,
+                        narrative_context=narrative_context
+                    )
+                    
+                    if combat_result:
+                        monsters_list = ", ".join(combat_result["monsters_added"])
+                        dm_response += f"\n\n⚔️ {combat_result['encounter_description']}\n**{monsters_list}** {'joins' if len(combat_result['monsters_added']) == 1 else 'join'} combat! Use `/initiative <roll>` to join the fight!"
+                        print(f"✅ Combat started with: {monsters_list}")
+                    else:
+                        dm_response += "\n\n⚔️ Combat begins! Use `/initiative <roll>` to join!"
+                        print("⚠️ Combat initiation failed, using manual combat prompt")
+            
             if len(dm_response) > self.max_response_length:
                 dm_response = dm_response[:self.max_response_length-3] + "..."
             
@@ -396,7 +504,7 @@ class UnifiedDMResponseSystem:
         except Exception as e:
             print(f"⚠️ Structured memory failed, falling back: {e}")
             return await self._generate_enhanced_memory_response(
-                user_id, player_input, guild_id, episode_id, character_name
+                user_id, player_input, guild_id, episode_id, character_name, channel_id
             )
 
     def _build_campaign_memory_prompt(self, character_name: str, player_input: str, 
@@ -513,9 +621,9 @@ class UnifiedDMResponseSystem:
         
         elif any(word in input_lower for word in ["attack", "fight", "combat", "strike"]):
             fallback_responses = [
-                f"Donnie calls for initiative as {character_name} enters combat! The sound of battle echoes across the giant-scarred landscape.",
-                f"Steel rings against steel as {character_name} joins the fray! Donnie tracks each blow in this deadly dance against the giant threat.",
-                f"Combat erupts around {character_name}! Donnie narrates the chaos of battle in a world where giants have upset the natural order."
+                f"Donnie calls for initiative as {character_name} enters combat! The sound of battle echoes across the giant-scarred landscape. ⚔️ Combat begins! Use `/initiative <roll>` to join!",
+                f"Steel rings against steel as {character_name} joins the fray! Donnie tracks each blow in this deadly dance against the giant threat. ⚔️ Combat begins! Use `/initiative <roll>` to join!",
+                f"Combat erupts around {character_name}! Donnie narrates the chaos of battle in a world where giants have upset the natural order. ⚔️ Combat begins! Use `/initiative <roll>` to join!"
             ]
         
         elif any(word in input_lower for word in ["talk", "speak", "say", "ask"]):
@@ -669,6 +777,7 @@ class UnifiedDMResponseSystem:
             "streamlined": f"✅ Available ({streamlined_rate:.1f}%)",
             "basic_fallback": f"✅ Available ({fallback_rate:.1f}%)",
             "emergency_fallback": f"✅ Available ({emergency_rate:.1f}%)",
+            "ai_combat": f"{'✅ Available' if self.ai_combat_manager else '❌ Not Available'}",
             "total_requests": str(total),
             "max_response_length": f"{self.max_response_length} chars",
             "response_timeout": f"{self.response_timeout}s",
@@ -685,6 +794,7 @@ class UnifiedDMResponseSystem:
             "total_requests": self.total_requests,
             "success_rate": ((self.total_requests - self.response_count["emergency_fallback"]) / max(self.total_requests, 1)) * 100,
             "enhanced_memory_rate": (self.response_count["enhanced_memory"] / max(self.total_requests, 1)) * 100,
+            "ai_combat_available": bool(self.ai_combat_manager),
             "system_health": "Excellent" if self.response_count["emergency_fallback"] == 0 else "Good" if self.response_count["emergency_fallback"] < (self.total_requests * 0.1) else "Needs Attention"
         }
 
@@ -728,15 +838,17 @@ def initialize_unified_response_system(claude_client, campaign_context: Dict,
     return unified_response_system
 
 async def generate_dm_response(user_id: str, player_input: str, 
-                             guild_id: str, episode_id: int) -> Tuple[str, str]:
+                             guild_id: str, episode_id: int, 
+                             channel_id: Optional[int] = None) -> Tuple[str, str]:
     """
-    MAIN INTERFACE: Generate DM response using unified system
+    MAIN INTERFACE: Generate DM response using unified system with AI combat integration
     
     Args:
         user_id: Discord user ID
         player_input: What the player wants to do
         guild_id: Discord guild ID
         episode_id: Current episode ID
+        channel_id: Discord channel ID (for combat integration)
         
     Returns:
         Tuple of (response_text, mode_used_string)
@@ -749,10 +861,47 @@ async def generate_dm_response(user_id: str, player_input: str,
         user_id=user_id,
         player_input=player_input,
         guild_id=guild_id,
-        episode_id=episode_id
+        episode_id=episode_id,
+        channel_id=channel_id
     )
     
     return response, mode.value
+
+async def generate_dm_response_with_combat(user_id: str, player_input: str, 
+                                         guild_id: str, episode_id: int, 
+                                         channel_id: int) -> Tuple[str, str]:
+    """
+    Generate DM response with combat integration using temporary storage approach
+    
+    Args:
+        user_id: Discord user ID
+        player_input: What the player wants to do
+        guild_id: Discord guild ID
+        episode_id: Current episode ID
+        channel_id: Discord channel ID (required for combat integration)
+        
+    Returns:
+        Tuple of (response_text, mode_used_string)
+    """
+    
+    if not unified_response_system:
+        raise RuntimeError("Unified response system not initialized!")
+    
+    # Temporarily store channel_id in the system
+    unified_response_system._current_channel_id = channel_id
+    
+    try:
+        response, mode = await unified_response_system.generate_dm_response(
+            user_id=user_id,
+            player_input=player_input,
+            guild_id=guild_id,
+            episode_id=episode_id
+        )
+        return response, mode.value
+    finally:
+        # Clean up
+        if hasattr(unified_response_system, '_current_channel_id'):
+            delattr(unified_response_system, '_current_channel_id')
 
 async def store_interaction_background(guild_id: str, episode_id: int, 
                                      user_id: str, player_input: str, 
