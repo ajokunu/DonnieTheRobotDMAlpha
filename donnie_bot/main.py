@@ -2243,7 +2243,7 @@ async def take_action_enhanced(interaction: discord.Interaction, what_you_do: st
     )
     
     # Voice status - use int guild_id for voice operations
-    voice_will_speak = voice_manager and voice_manager.is_voice_active(guild_id)
+    voice_will_speak = voice_manager and voice_manager.is_voice_active(guild_id_int)
 
     if voice_will_speak:
         embed.add_field(name="🎤", value="*Donnie prepares...*", inline=False)
@@ -2742,6 +2742,31 @@ async def add_enemy_command(interaction: discord.Interaction, name: str, initiat
     except Exception as e:
         print(f"❌ Error in add_enemy_command: {e}")
         await interaction.response.send_message(f"❌ Error adding enemy: {e}", ephemeral=True)
+
+@bot.tree.command(name="join_voice", description="Donnie joins your voice channel for TTS narration")
+async def join_voice_command(interaction: discord.Interaction):
+    """Join voice channel command"""
+    try:
+        if not voice_manager:
+            await interaction.response.send_message("❌ Voice manager not initialized!", ephemeral=True)
+            return
+        
+        success = await voice_manager.join_voice_channel(interaction)
+        if not success:
+            print(f"❌ join_voice_channel returned False for guild {interaction.guild.id}")
+            
+    except Exception as e:
+        print(f"❌ Error in join_voice_command: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Error joining voice: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ Error joining voice: {e}", ephemeral=True)
+        except:
+            pass
 
 @bot.tree.command(name="next_turn", description="Advance to next turn (Admin only)")
 async def next_turn_command(interaction: discord.Interaction):
