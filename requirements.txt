@@ -1,6 +1,0 @@
-discord.py[voice]
-anthropic
-openai
-python-dotenv
-PyNaCl
-wave
