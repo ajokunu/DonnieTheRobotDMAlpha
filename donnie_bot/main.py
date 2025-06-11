@@ -20,7 +20,7 @@ from src.presentation.discord_bot import DonnieBot, CustomHelp
 async def main():
     """Main application entry point"""
     
-    # Setup logging
+    # Setup logging first (before any validation)
     log_file = "logs/donnie.log" if not settings.is_development() else None
     logger = setup_logging(
         level="DEBUG" if settings.is_development() else "INFO",
@@ -30,13 +30,49 @@ async def main():
     logger.info("🎲 Starting Donnie the DM...")
     logger.info(f"📊 Environment: {settings.get_environment()}")
     logger.info(f"🗂️ Database: {settings.database.path}")
-    logger.info(f"🤖 AI Model: {settings.ai.model}")
-    logger.info(f"🔊 Voice Enabled: {settings.voice.enabled}")
     
     # Validate configuration
-    if not settings.validate():
-        logger.error("❌ Configuration validation failed")
+    is_valid, errors = settings.validate()
+    
+    # Show configuration status
+    if settings.ai.is_available():
+        logger.info(f"🤖 AI Model: {settings.ai.model}")
+    else:
+        logger.warning("🤖 AI Service: DISABLED (missing API key)")
+    
+    logger.info(f"🔊 Voice Enabled: {settings.voice.enabled}")
+    
+    # Handle validation errors
+    if errors:
+        for error in errors:
+            if "AI features will be disabled" in error:
+                logger.warning(f"⚠️ {error}")
+            else:
+                logger.error(f"❌ {error}")
+    
+    if not is_valid:
+        logger.error("❌ Configuration validation failed - cannot start bot")
         return 1
+    
+    # Show feature availability
+    features = []
+    if settings.ai.is_available():
+        features.append("✅ AI-powered responses")
+    else:
+        features.append("❌ AI responses (missing API key)")
+    
+    features.append("✅ Character management")
+    features.append("✅ Episode tracking")
+    features.append("✅ Combat mechanics")
+    
+    if settings.voice.enabled:
+        features.append("✅ Voice framework")
+    else:
+        features.append("❌ Voice (disabled)")
+    
+    logger.info("🎯 Available features:")
+    for feature in features:
+        logger.info(f"   {feature}")
     
     # Create bot instance
     bot = DonnieBot()

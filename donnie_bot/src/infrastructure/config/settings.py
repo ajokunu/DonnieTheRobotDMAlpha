@@ -1,5 +1,5 @@
 """
-Configuration management for infrastructure
+Configuration management for infrastructure components.
 """
 import os
 from dataclasses import dataclass
@@ -44,8 +44,12 @@ class AIConfig:
         if not self.api_key:
             self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
         
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable required")
+        # Don't raise error here - let the bot start without AI
+        # We'll validate when AI features are actually used
+    
+    def is_available(self) -> bool:
+        """Check if AI service is available"""
+        return bool(self.api_key.strip())
 
 
 @dataclass
@@ -75,8 +79,7 @@ class DiscordConfig:
         if not self.token:
             self.token = os.getenv("DISCORD_TOKEN", "")
         
-        if not self.token:
-            raise ValueError("DISCORD_TOKEN environment variable required")
+        # Don't raise error here either - we'll check this in main.py
 
 
 @dataclass
@@ -115,10 +118,16 @@ class Settings:
             self.ai.model = model
         
         if max_tokens := os.getenv("AI_MAX_TOKENS"):
-            self.ai.max_tokens = int(max_tokens)
+            try:
+                self.ai.max_tokens = int(max_tokens)
+            except ValueError:
+                pass
         
         if temperature := os.getenv("AI_TEMPERATURE"):
-            self.ai.temperature = float(temperature)
+            try:
+                self.ai.temperature = float(temperature)
+            except ValueError:
+                pass
         
         # Voice overrides
         if voice_enabled := os.getenv("VOICE_ENABLED"):
@@ -128,28 +137,31 @@ class Settings:
         if prefix := os.getenv("COMMAND_PREFIX"):
             self.discord.command_prefix = prefix
     
-    def validate(self) -> bool:
-        """Validate all configuration"""
+    def validate(self) -> tuple[bool, list[str]]:
+        """Validate all configuration and return (is_valid, errors)"""
+        errors = []
+        
         try:
-            # Check required API keys
+            # Check required Discord token
             if not self.discord.token:
-                raise ValueError("Discord token required")
+                errors.append("DISCORD_TOKEN environment variable is required")
             
-            if not self.ai.api_key:
-                raise ValueError("Anthropic API key required")
+            # AI is optional - just warn if missing
+            if not self.ai.is_available():
+                errors.append("ANTHROPIC_API_KEY not set - AI features will be disabled")
             
             # Validate ranges
             if not (0.0 <= self.ai.temperature <= 2.0):
-                raise ValueError("AI temperature must be between 0.0 and 2.0")
+                errors.append("AI temperature must be between 0.0 and 2.0")
             
             if self.ai.max_tokens < 1:
-                raise ValueError("AI max_tokens must be positive")
+                errors.append("AI max_tokens must be positive")
             
-            return True
+            return len(errors) == 0 or (len(errors) == 1 and "AI features will be disabled" in errors[0]), errors
             
         except Exception as e:
-            print(f"❌ Configuration validation failed: {e}")
-            return False
+            errors.append(f"Configuration validation error: {e}")
+            return False, errors
     
     def get_environment(self) -> str:
         """Get current environment (dev/prod)"""

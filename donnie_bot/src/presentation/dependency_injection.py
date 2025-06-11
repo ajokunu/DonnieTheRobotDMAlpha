@@ -71,12 +71,16 @@ class DependencyContainer:
         self.repository_factory = SQLiteRepositoryFactory(settings.database.path)
         logger.info(f"📁 Database path: {settings.database.path}")
         
-        # AI service
-        if settings.ai.api_key:
-            self.ai_service = ClaudeService(settings.ai)
-            logger.info(f"🤖 AI service initialized (model: {settings.ai.model})")
+        # AI service (optional)
+        if settings.ai.is_available():
+            try:
+                self.ai_service = ClaudeService(settings.ai)
+                logger.info(f"🤖 AI service initialized (model: {settings.ai.model})")
+            except Exception as e:
+                logger.warning(f"⚠️ AI service failed to initialize: {e}")
+                self.ai_service = None
         else:
-            logger.warning("⚠️ AI service not initialized - missing API key")
+            logger.warning("⚠️ AI service not initialized - missing API key (AI features disabled)")
         
         # Voice service
         self.voice_service = DiscordVoiceService(settings.voice)
@@ -105,23 +109,23 @@ class DependencyContainer:
         # Character service
         self.character_service = CharacterService(
             character_repo=character_repo,
-            ai_service=self.ai_service
+            ai_service=self.ai_service  # Can be None
         )
         
         # Episode service  
         self.episode_service = EpisodeService(
             episode_repo=episode_repo,
             memory_repo=memory_repo,
-            ai_service=self.ai_service
+            ai_service=self.ai_service  # Can be None
         )
         
         # Memory service
         self.memory_service = MemoryService(
             memory_repo=memory_repo,
-            ai_service=self.ai_service
+            ai_service=self.ai_service  # Can be None
         )
         
-        # Combat service
+        # Combat service (doesn't need AI)
         self.combat_service = CombatService()
         
         logger.info("✅ Domain services initialized")
@@ -148,7 +152,7 @@ class DependencyContainer:
         self.action_use_case = HandleActionUseCase(
             episode_service=self.episode_service,
             character_service=self.character_service,
-            ai_service=self.ai_service,
+            ai_service=self.ai_service,  # Can be None
             memory_service=self.memory_service,
             combat_service=self.combat_service,
             cache_service=self.cache_service

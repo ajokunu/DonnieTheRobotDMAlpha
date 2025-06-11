@@ -7,7 +7,7 @@ from discord import app_commands
 from typing import Optional
 
 from ..dependency_injection import container
-from ..discord_bot import handle_use_case_result, create_character_embed
+from ..utils import handle_use_case_result, create_character_embed
 from ...application.dto import (
     CreateCharacterCommand, GenerateCharacterCommand, LevelUpCommand,
     HealCommand, DamageCommand
@@ -354,7 +354,6 @@ class CharacterDeleteView(discord.ui.View):
     async def on_timeout(self):
         """Handle timeout"""
         self.clear_items()
-        # Note: Can't edit message on timeout without interaction
 
 
 # Party commands as separate group
